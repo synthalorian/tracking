@@ -1,0 +1,6 @@
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+Manifest.toml
+LocalPreferences.toml
+deps/deps.jl

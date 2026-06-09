@@ -20,6 +20,9 @@ include("waterfall.jl")
 # Phase 5: Peak detection algorithm
 include("peak.jl")
 
+# Phase 6: Harmonic series tracking
+include("harmonic.jl")
+
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
 export AudioCapture, start!, stop!, isrunning, sample_rate, channels, buffer_size, latency_samples, latency_ms
@@ -53,5 +56,19 @@ export track_peaks!, reset!
 export peak_frequencies, peak_magnitudes, peak_bins
 export filter_by_confidence, filter_by_snr, top_peaks
 export num_peaks, has_peaks, peaks_to_matrix, print_peaks
+
+# Phase 6 exports
+export Harmonic, HarmonicSeries, HarmonicTracker
+export find_harmonic_series!, find_harmonic_series
+export track_harmonics!, reset!
+export harmonic_count, harmonic_frequencies, harmonic_magnitudes
+export harmonic_numbers, fundamental_frequency, fundamental_magnitude
+export average_deviation, overall_confidence, inharmonicity
+export has_min_harmonics, num_series, has_series
+export strongest_series, richest_series
+export filter_by_harmonic_count, filter_by_inharmonicity
+export filter_by_confidence, filter_by_fundamental
+export freq_to_midi, midi_to_freq, freq_to_note, note_estimate
+export print_series, series_to_matrix, detect_harmonics
 
 end # module

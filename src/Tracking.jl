@@ -23,6 +23,9 @@ include("peak.jl")
 # Phase 6: Harmonic series tracking
 include("harmonic.jl")
 
+# Phase 7: MIDI export of detected notes
+include("midi.jl")
+
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
 export AudioCapture, start!, stop!, isrunning, sample_rate, channels, buffer_size, latency_samples, latency_ms
@@ -70,5 +73,13 @@ export filter_by_harmonic_count, filter_by_inharmonicity
 export filter_by_confidence, filter_by_fundamental
 export freq_to_midi, midi_to_freq, freq_to_note, note_estimate
 export print_series, series_to_matrix, detect_harmonics
+
+# Phase 7 exports
+export MIDINote, MIDIExporter
+export series_to_note, series_to_notes, freq_to_note
+export export_midi, export_frequencies
+export note_names, tempo_to_bpm, set_bpm!
+export note_count, pitch_range, notes_to_matrix
+export print_notes, validate_midi, midi_info
 
 end # module

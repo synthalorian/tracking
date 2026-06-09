@@ -2,6 +2,7 @@ module Tracking
 
 using PortAudio
 using FFTW
+using GLMakie
 
 # Phase 1: Audio capture (PortAudio + RingBuffer)
 include("ringbuffer.jl")
@@ -9,6 +10,9 @@ include("audio.jl")
 
 # Phase 2: FFT engine (FFTW) with windowing
 include("fft.jl")
+
+# Phase 3: Real-time spectrum display (GLMakie)
+include("spectrum.jl")
 
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
@@ -21,5 +25,14 @@ export frequency_bins, bin_to_hz, hz_to_bin, frequency_resolution
 export find_peak_bin, find_peaks, magnitude_at_bin, magnitude_at_hz
 export fft_size, num_bins, nyquist, window_coefficients, window_type
 export window_power_correction, window_amplitude_correction
+
+# Phase 3 exports
+export SpectrumDisplay, DisplayConfig
+export FrequencyScale, LinearScale, LogScale
+export MagnitudeScale, LinearMagnitude, DecibelMagnitude
+export LinearSpectrumDisplay, LogSpectrumDisplay
+export update!, display_figure, reset_peaks!
+export set_freq_limits!, set_mag_limits!, set_title!
+export frequency_data, magnitude_data, peak_data, screenshot
 
 end # module

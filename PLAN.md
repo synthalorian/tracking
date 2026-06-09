@@ -17,12 +17,15 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 1: Audio capture (PortAudio + RingBuffer)
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented thread-safe `RingBuffer{T}` with overwrite mode for real-time audio streaming
+- Implemented `AudioCapture` struct wrapping PortAudio with async capture to ringbuffer
+- Supports mono/stereo capture with automatic downmix
+- 41 tests passing covering basic ops, batch ops, wraparound, thread safety, and error handling 
 
 ---
 

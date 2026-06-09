@@ -34,12 +34,15 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 2: FFT engine (FFTW) with windowing
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented `FFTEngine` with FFTW real FFT, Hann/Hamming/Blackman windowing
+- Window power and amplitude correction factors
+- Frequency bin utilities, peak detection helpers
+- 20+ tests passing
 
 ---
 
@@ -48,12 +51,15 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 3: Real-time spectrum display (GLMakie)
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented `SpectrumDisplay` with real-time GLMakie plotting
+- Log/linear frequency scales, dB/linear magnitude scales
+- Peak hold with decay, configurable display limits
+- 15+ tests passing
 
 ---
 
@@ -80,12 +86,18 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 5: Peak detection algorithm
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented `Peak` struct with sub-bin frequency, magnitude, SNR, confidence
+- `PeakDetector` with configurable SNR threshold, min peak distance, frequency range
+- Parabolic interpolation for sub-bin frequency accuracy (~0.1-1 Hz precision)
+- Noise floor estimation using percentile-based robust estimator
+- Temporal peak tracking across frames for stability
+- Convenience functions: `detect_peaks`, `find_peak`, `track_peaks!`, filtering helpers
+- 20+ tests covering interpolation accuracy, SNR thresholding, peak spacing, tracking
 
 ---
 

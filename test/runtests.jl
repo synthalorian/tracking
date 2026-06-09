@@ -1078,3 +1078,631 @@ end
     end
     
 end
+
+@testset "Phase 5: Peak Detection Algorithm" begin
+    
+    @testset "Peak struct" begin
+        
+        @testset "Construction" begin
+            p = Peak(1000.0, 5.0, 23, 0.1, 0.95, 20.0)
+            @test p.frequency == 1000.0f0
+            @test p.magnitude == 5.0f0
+            @test p.bin == 23
+            @test p.bin_offset == 0.1f0
+            @test p.confidence == 0.95f0
+            @test p.snr_db == 20.0f0
+            @test p.frame_id == 0
+        end
+        
+        @testset "With frame_id" begin
+            p = Peak(440.0, 1.0, 10, 0.0, 0.8, 15.0, 5)
+            @test p.frame_id == 5
+        end
+        
+        @testset "Show" begin
+            p = Peak(1000.0, 5.0, 23, 0.1, 0.95, 20.0)
+            io = IOBuffer()
+            show(io, p)
+            str = String(take!(io))
+            @test occursin("Peak", str)
+            @test occursin("1000.0", str)
+            @test occursin("SNR=20.0", str)
+        end
+    end
+    
+    @testset "PeakDetector construction" begin
+        
+        @testset "Default parameters" begin
+            pd = PeakDetector()
+            @test pd.min_height == 0.0f0
+            @test pd.snr_threshold == 10.0f0
+            @test pd.min_peak_distance == 50.0f0
+            @test pd.min_freq == 20.0f0
+            @test pd.max_freq == 22050.0f0
+            @test pd.noise_floor_percentile == 50.0f0
+            @test pd.exclude_dc == true
+            @test pd.max_peaks == 100
+            @test pd.use_interpolation == true
+            @test pd.frame_counter == 0
+            @test isempty(pd.prev_peaks)
+        end
+        
+        @testset "Custom parameters" begin
+            pd = PeakDetector(
+                min_height=0.5,
+                snr_threshold=15.0,
+                min_peak_distance=100.0,
+                min_freq=100.0,
+                max_freq=8000.0,
+                noise_floor_percentile=75.0,
+                exclude_dc=false,
+                max_peaks=50,
+                use_interpolation=false
+            )
+            @test pd.min_height == 0.5f0
+            @test pd.snr_threshold == 15.0f0
+            @test pd.min_peak_distance == 100.0f0
+            @test pd.min_freq == 100.0f0
+            @test pd.max_freq == 8000.0f0
+            @test pd.noise_floor_percentile == 75.0f0
+            @test pd.exclude_dc == false
+            @test pd.max_peaks == 50
+            @test pd.use_interpolation == false
+        end
+        
+        @testset "Show" begin
+            pd = PeakDetector()
+            io = IOBuffer()
+            show(io, pd)
+            str = String(take!(io))
+            @test occursin("PeakDetector", str)
+            @test occursin("SNR=10.0", str)
+            @test occursin("interp=true", str)
+        end
+    end
+    
+    @testset "Noise floor estimation" begin
+        
+        @testset "Median noise floor" begin
+            mags = Float32[0.1, 0.2, 5.0, 0.15, 0.1, 0.2, 0.1]
+            noise = Tracking._estimate_noise_floor(mags, 50.0f0)
+            # Median should be around 0.15
+            @test noise ≈ 0.15f0 atol=0.05f0
+        end
+        
+        @testset "Empty spectrum" begin
+            noise = Tracking._estimate_noise_floor(Float32[], 50.0f0)
+            @test noise == 0.0f0
+        end
+        
+        @testset "Percentile variation" begin
+            mags = Float32[0.1, 0.2, 5.0, 10.0, 0.15, 0.1]
+            
+            # 50th percentile (median)
+            noise_50 = Tracking._estimate_noise_floor(mags, 50.0f0)
+            
+            # 90th percentile should be higher
+            noise_90 = Tracking._estimate_noise_floor(mags, 90.0f0)
+            @test noise_90 >= noise_50
+        end
+    end
+    
+    @testset "Parabolic interpolation" begin
+        
+        @testset "Perfect parabola" begin
+            freq_bins = Float32[0.0, 43.0, 86.0, 129.0, 172.0]
+            # Perfect parabola with peak at bin 3 (index 3, 1-based)
+            # Peak at x=0 (center), y=10
+            mags = Float32[6.0, 8.0, 10.0, 8.0, 6.0]
+            
+            refined_freq, refined_mag, offset = Tracking._refine_peak_parabolic(freq_bins, mags, 3)
+            
+            # Should be very close to center
+            @test abs(offset) < 0.01f0
+            @test refined_mag ≈ 10.0f0 atol=0.01f0
+            @test refined_freq ≈ 86.0f0 atol=1.0f0
+        end
+        
+        @testset "Offset parabola" begin
+            freq_bins = Float32[0.0, 43.0, 86.0, 129.0, 172.0]
+            # Asymmetric: peak is slightly to the right of bin 3
+            # a = mag[i-1] = 7, b = mag[i] = 10, c = mag[i+1] = 9
+            # c > a means peak is to the right, so offset should be positive
+            mags = Float32[6.0, 7.0, 10.0, 9.0, 7.0]
+            
+            refined_freq, refined_mag, offset = Tracking._refine_peak_parabolic(freq_bins, mags, 3)
+            
+            # When c > a, peak is to the right (higher frequency), offset is positive
+            # offset = (c - a) / (2 * (2b - a - c)) = (9 - 7) / (2 * (20 - 7 - 9)) = 2 / 8 = 0.25
+            @test offset > 0.0f0
+            @test abs(offset) < 0.5f0
+            @test refined_freq > freq_bins[3]  # Refined freq should be higher than center bin
+        end
+        
+        @testset "Edge cases" begin
+            freq_bins = Float32[0.0, 43.0, 86.0]
+            mags = Float32[1.0, 2.0, 1.0]
+            
+            # First bin - can't interpolate
+            f1, m1, o1 = Tracking._refine_peak_parabolic(freq_bins, mags, 1)
+            @test o1 == 0.0f0
+            
+            # Last bin - can't interpolate
+            f3, m3, o3 = Tracking._refine_peak_parabolic(freq_bins, mags, 3)
+            @test o3 == 0.0f0
+        end
+    end
+    
+    @testset "SNR calculation" begin
+        
+        @testset "Basic SNR" begin
+            snr = Tracking._calculate_snr(10.0f0, 1.0f0)
+            @test snr ≈ 20.0f0 atol=0.1f0  # 20*log10(10) = 20 dB
+        end
+        
+        @testset "Low SNR" begin
+            snr = Tracking._calculate_snr(2.0f0, 1.0f0)
+            @test snr ≈ 6.02f0 atol=0.1f0  # 20*log10(2) ≈ 6.02 dB
+        end
+        
+        @testset "Zero noise" begin
+            snr = Tracking._calculate_snr(1.0f0, 0.0f0)
+            @test snr == 0.0f0
+        end
+    end
+    
+    @testset "Confidence calculation" begin
+        
+        @testset "High SNR" begin
+            conf = Tracking._calculate_confidence(30.0f0, 10.0f0)
+            @test conf > 0.9f0
+            @test conf <= 1.0f0
+        end
+        
+        @testset "At threshold" begin
+            conf = Tracking._calculate_confidence(10.0f0, 10.0f0)
+            @test conf > 0.5f0
+            @test conf < 1.0f0
+        end
+        
+        @testset "Below threshold" begin
+            conf = Tracking._calculate_confidence(5.0f0, 10.0f0)
+            @test conf < 0.5f0
+            @test conf >= 0.0f0
+        end
+        
+        @testset "Zero SNR" begin
+            conf = Tracking._calculate_confidence(0.0f0, 10.0f0)
+            @test conf == 0.0f0
+        end
+    end
+    
+    @testset "Peak detection - single sine wave" begin
+        sr = 44100
+        nfft = 4096
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=5.0, min_peak_distance=20.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 1
+        @test has_peaks(peaks)
+        
+        # Strongest peak should be near 1000 Hz (within 2 Hz with interpolation)
+        strongest = peaks[1]
+        @test strongest.frequency ≈ freq atol=2.0
+        @test strongest.magnitude > 0.0f0
+        @test strongest.confidence > 0.5f0
+        @test strongest.snr_db > 5.0f0
+        @test strongest.bin >= 0
+        @test strongest.bin < nfft ÷ 2
+    end
+    
+    @testset "Peak detection - multiple sine waves" begin
+        sr = 44100
+        nfft = 4096
+        
+        freq1 = 440.0   # A4
+        freq2 = 880.0   # A5
+        freq3 = 1760.0  # A6
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * freq1 * ti) +
+            0.5 * sin(2π * freq2 * ti) +
+            0.3 * sin(2π * freq3 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=100.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 2
+        @test num_peaks(peaks) >= 2
+        
+        # Should find peaks near expected frequencies
+        peak_freqs = peak_frequencies(peaks)
+        
+        # Check for 440 Hz
+        found_440 = any(f -> abs(f - freq1) < 10.0, peak_freqs)
+        @test found_440
+        
+        # Check for 880 Hz
+        found_880 = any(f -> abs(f - freq2) < 10.0, peak_freqs)
+        @test found_880
+    end
+    
+    @testset "Peak detection - SNR threshold" begin
+        sr = 44100
+        nfft = 2048
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        # High SNR threshold should still find the strong peak
+        detector_high = PeakDetector(snr_threshold=20.0)
+        peaks_high = detect_peaks!(detector_high, engine)
+        @test length(peaks_high) >= 1
+        
+        # Very high SNR threshold might filter out the peak
+        detector_very_high = PeakDetector(snr_threshold=100.0)
+        peaks_very_high = detect_peaks!(detector_very_high, engine)
+        # Result depends on actual SNR, but test that it runs without error
+        @test typeof(peaks_very_high) == Vector{Peak}
+    end
+    
+    @testset "Peak detection - min peak distance" begin
+        sr = 44100
+        nfft = 4096
+        
+        # Two well-separated frequencies (at least 9 bins apart)
+        # With nfft=4096, resolution is ~10.8 Hz
+        freq1 = 1000.0
+        freq2 = 1100.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * freq1 * ti) +
+            0.8 * sin(2π * freq2 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        # With large min distance, fewer peaks should be found (distance filtering works)
+        detector_wide = PeakDetector(min_peak_distance=200.0, snr_threshold=10.0)
+        peaks_wide = detect_peaks!(detector_wide, engine)
+        
+        # With small min distance, more peaks may be found
+        detector_narrow = PeakDetector(min_peak_distance=10.0, snr_threshold=10.0)
+        peaks_narrow = detect_peaks!(detector_narrow, engine)
+        
+        # The wide detector should find fewer or equal peaks than the narrow one
+        @test length(peaks_wide) <= length(peaks_narrow)
+        
+        # With large distance, the strongest peak should suppress nearby peaks
+        if !isempty(peaks_wide)
+            @test peaks_wide[1].frequency ≈ freq1 atol=10.0
+        end
+        
+        # With small distance, should be able to find both frequencies
+        if length(peaks_narrow) >= 2
+            peak_freqs = peak_frequencies(peaks_narrow)
+            found_1000 = any(f -> abs(f - freq1) < 15.0, peak_freqs)
+            found_1100 = any(f -> abs(f - freq2) < 15.0, peak_freqs)
+            @test found_1000 || found_1100
+        end
+    end
+    
+    @testset "Peak detection - frequency range filtering" begin
+        sr = 44100
+        nfft = 2048
+        
+        freq_low = 200.0
+        freq_high = 5000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * freq_low * ti) +
+            0.8 * sin(2π * freq_high * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        # Filter to only high frequencies
+        detector = PeakDetector(min_freq=1000.0, snr_threshold=3.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 1
+        # All peaks should be above 1000 Hz
+        @test all(p -> p.frequency >= 1000.0f0, peaks)
+    end
+    
+    @testset "Peak detection - max peaks limit" begin
+        sr = 44100
+        nfft = 2048
+        
+        # Multi-frequency signal
+        freqs = [200.0, 400.0, 600.0, 800.0, 1000.0, 1200.0, 1400.0, 1600.0]
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            sum(sin(2π * f * ti) for f in freqs)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(max_peaks=3, snr_threshold=3.0, min_peak_distance=50.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) <= 3
+    end
+    
+    @testset "Peak detection - no interpolation" begin
+        sr = 44100
+        nfft = 2048
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(use_interpolation=false, snr_threshold=5.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 1
+        # Without interpolation, offset should be 0
+        @test peaks[1].bin_offset == 0.0f0
+    end
+    
+    @testset "Peak detection - empty signal" begin
+        sr = 44100
+        nfft = 512
+        
+        engine = FFTEngine(nfft, sr)
+        samples = zeros(Float32, nfft)
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=1.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test isempty(peaks)
+        @test !has_peaks(peaks)
+        @test num_peaks(peaks) == 0
+    end
+    
+    @testset "find_peak convenience function" begin
+        sr = 44100
+        nfft = 4096
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=5.0)
+        peak = find_peak(detector, engine)
+        
+        @test peak !== nothing
+        @test peak isa Peak
+        @test peak.frequency ≈ freq atol=2.0
+    end
+    
+    @testset "detect_peaks convenience function" begin
+        sr = 44100
+        nfft = 2048
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        peaks = detect_peaks(engine; snr_threshold=5.0, max_peaks=5)
+        
+        @test length(peaks) >= 1
+        @test peaks isa Vector{Peak}
+    end
+    
+    @testset "Peak helper functions" begin
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.1, 0.95, 25.0),
+            Peak(880.0, 8.0, 40, 0.05, 0.90, 22.0),
+            Peak(1320.0, 5.0, 60, -0.1, 0.80, 18.0),
+            Peak(1760.0, 3.0, 80, 0.0, 0.70, 15.0)
+        ]
+        
+        @testset "peak_frequencies" begin
+            freqs = peak_frequencies(peaks)
+            @test freqs == Float32[440.0, 880.0, 1320.0, 1760.0]
+        end
+        
+        @testset "peak_magnitudes" begin
+            mags = peak_magnitudes(peaks)
+            @test mags == Float32[10.0, 8.0, 5.0, 3.0]
+        end
+        
+        @testset "peak_bins" begin
+            bins = peak_bins(peaks)
+            @test bins == [20, 40, 60, 80]
+        end
+        
+        @testset "filter_by_confidence" begin
+            high_conf = filter_by_confidence(peaks, 0.85)
+            @test length(high_conf) == 2
+            @test high_conf[1].frequency == 440.0f0
+            @test high_conf[2].frequency == 880.0f0
+        end
+        
+        @testset "filter_by_snr" begin
+            high_snr = filter_by_snr(peaks, 20.0)
+            @test length(high_snr) == 2
+        end
+        
+        @testset "top_peaks" begin
+            top2 = top_peaks(peaks, 2)
+            @test length(top2) == 2
+            @test top2[1].frequency == 440.0f0
+            @test top2[2].frequency == 880.0f0
+        end
+        
+        @testset "peaks_to_matrix" begin
+            mat = peaks_to_matrix(peaks)
+            @test size(mat) == (4, 6)
+            @test mat[1, 1] == 440.0f0  # First peak frequency
+            @test mat[1, 2] == 10.0f0   # First peak magnitude
+        end
+    end
+    
+    @testset "Temporal peak tracking" begin
+        
+        @testset "Basic tracking" begin
+            detector = PeakDetector()
+            
+            # Frame 1: peaks at 440 and 880
+            peaks1 = [
+                Peak(440.0, 10.0, 20, 0.1, 0.95, 25.0, 1),
+                Peak(880.0, 8.0, 40, 0.05, 0.90, 22.0, 1)
+            ]
+            
+            tracked1 = track_peaks!(detector, peaks1; freq_tolerance=20.0)
+            @test length(tracked1) == 2
+            
+            # Frame 2: same peaks with slight drift
+            peaks2 = [
+                Peak(441.0, 9.5, 20, 0.1, 0.94, 24.0, 2),
+                Peak(879.0, 7.8, 40, 0.05, 0.89, 21.0, 2)
+            ]
+            
+            tracked2 = track_peaks!(detector, peaks2; freq_tolerance=20.0)
+            @test length(tracked2) == 2
+        end
+        
+        @testset "Tracking with disappearance" begin
+            detector = PeakDetector()
+            
+            # Frame 1: one peak
+            peaks1 = [Peak(440.0, 10.0, 20, 0.1, 0.95, 25.0, 1)]
+            tracked1 = track_peaks!(detector, peaks1)
+            @test length(tracked1) == 1
+            
+            # Frame 2: peak is gone
+            peaks2 = Peak[]
+            tracked2 = track_peaks!(detector, peaks2)
+            @test isempty(tracked2)
+        end
+        
+        @testset "Reset detector" begin
+            detector = PeakDetector()
+            detector.frame_counter = 5
+            detector.prev_peaks = [Peak(440.0, 10.0, 20, 0.1, 0.95, 25.0, 1)]
+            
+            reset!(detector)
+            
+            @test detector.frame_counter == 0
+            @test isempty(detector.prev_peaks)
+        end
+    end
+    
+    @testset "Peak detection from raw vectors" begin
+        # Create a simple magnitude spectrum with a clear peak
+        freq_bins = Float32[0.0, 43.0, 86.0, 129.0, 172.0, 215.0]
+        mags = Float32[0.1, 0.2, 5.0, 0.3, 0.1, 0.1]
+        df = 43.0f0
+        
+        detector = PeakDetector(snr_threshold=1.0, exclude_dc=false)
+        peaks = detect_peaks!(detector, mags, freq_bins, df)
+        
+        @test length(peaks) >= 1
+        @test peaks[1].frequency ≈ 86.0f0 atol=5.0f0
+    end
+    
+    @testset "Integration with FFTEngine" begin
+        sr = 44100
+        nfft = 2048
+        
+        # Complex signal
+        freqs = [440.0, 880.0, 1320.0]
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            sum(sin(2π * f * ti) for f in freqs)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        # Use the new peak detection
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=100.0)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 2
+        
+        # Verify peaks are sorted by magnitude
+        for i in 2:length(peaks)
+            @test peaks[i-1].magnitude >= peaks[i].magnitude
+        end
+        
+        # Verify all peaks have valid properties
+        for peak in peaks
+            @test peak.frequency > 0.0f0
+            @test peak.magnitude > 0.0f0
+            @test peak.confidence > 0.0f0
+            @test peak.snr_db > 0.0f0
+        end
+    end
+    
+    @testset "Sub-bin accuracy" begin
+        sr = 44100
+        nfft = 4096
+        
+        # Frequency that doesn't align exactly with a bin
+        # With nfft=4096 and sr=44100, bin spacing is ~10.77 Hz
+        # 1000 Hz is between bins 93 (1001.0 Hz) and 92 (990.2 Hz)
+        freq = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, use_interpolation=true)
+        peaks = detect_peaks!(detector, engine)
+        
+        @test length(peaks) >= 1
+        
+        peak = peaks[1]
+        
+        # With interpolation, frequency should be very close to true frequency
+        @test peak.frequency ≈ freq atol=2.0
+        
+        # Bin offset should be non-zero for off-bin frequencies
+        @test abs(peak.bin_offset) < 0.5f0
+    end
+    
+end

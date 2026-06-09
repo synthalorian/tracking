@@ -544,3 +544,271 @@ end
     end
     
 end
+
+@testset "Phase 3: Spectrum Display" begin
+    
+    @testset "DisplayConfig" begin
+        
+        @testset "Default construction" begin
+            config = DisplayConfig()
+            @test config.freq_scale isa LogScale
+            @test config.mag_scale isa DecibelMagnitude
+            @test config.min_freq == 20.0f0
+            @test config.max_freq == 22050.0f0
+            @test config.db_range == 80.0f0
+            @test config.db_ref == 1.0f0
+            @test config.peak_hold == true
+            @test config.peak_decay == 20.0f0
+            @test config.refresh_rate == 30.0f0
+            @test config.title == "Spectrum Analyzer"
+        end
+        
+        @testset "Custom construction" begin
+            config = DisplayConfig(
+                freq_scale=LinearScale(),
+                mag_scale=LinearMagnitude(),
+                min_freq=100.0,
+                max_freq=10000.0,
+                db_range=60.0,
+                db_ref=0.5,
+                peak_hold=false,
+                peak_decay=10.0,
+                refresh_rate=60.0,
+                title="Custom Display"
+            )
+            @test config.freq_scale isa LinearScale
+            @test config.mag_scale isa LinearMagnitude
+            @test config.min_freq == 100.0f0
+            @test config.max_freq == 10000.0f0
+            @test config.db_range == 60.0f0
+            @test config.db_ref == 0.5f0
+            @test config.peak_hold == false
+            @test config.peak_decay == 10.0f0
+            @test config.refresh_rate == 60.0f0
+            @test config.title == "Custom Display"
+        end
+    end
+    
+    @testset "Frequency and magnitude scales" begin
+        @test LinearScale() isa FrequencyScale
+        @test LogScale() isa FrequencyScale
+        @test LinearMagnitude() isa MagnitudeScale
+        @test DecibelMagnitude() isa MagnitudeScale
+    end
+    
+    @testset "SpectrumDisplay construction" begin
+        engine = FFTEngine(1024, 44100)
+        
+        @testset "Default constructor" begin
+            display = SpectrumDisplay(engine=engine)
+            @test display.config.freq_scale isa LogScale
+            @test display.config.mag_scale isa DecibelMagnitude
+            @test !display.running
+            @test display.task === nothing
+            @test display.config.title == "Spectrum Analyzer"
+        end
+        
+        @testset "With custom config" begin
+            config = DisplayConfig(
+                freq_scale=LinearScale(),
+                mag_scale=LinearMagnitude(),
+                title="Test Display"
+            )
+            display = SpectrumDisplay(config, engine=engine)
+            @test display.config.freq_scale isa LinearScale
+            @test display.config.mag_scale isa LinearMagnitude
+            @test display.config.title == "Test Display"
+        end
+        
+        @testset "Convenience constructors" begin
+            linear_display = LinearSpectrumDisplay(engine)
+            @test linear_display.config.freq_scale isa LinearScale
+            @test linear_display.config.mag_scale isa DecibelMagnitude
+            
+            log_display = LogSpectrumDisplay(engine)
+            @test log_display.config.freq_scale isa LogScale
+            @test log_display.config.mag_scale isa DecibelMagnitude
+        end
+    end
+    
+    @testset "Display scale conversion" begin
+        config_linear = DisplayConfig(mag_scale=LinearMagnitude())
+        config_db = DisplayConfig(mag_scale=DecibelMagnitude())
+        
+        # Linear magnitude should pass through unchanged
+        @test Tracking._to_display_scale(1.0f0, config_linear) == 1.0f0
+        @test Tracking._to_display_scale(0.5f0, config_linear) == 0.5f0
+        
+        # dB conversion: 1.0 -> 0 dB, 0.5 -> ~-6 dB, 0.1 -> -20 dB
+        @test Tracking._to_display_scale(1.0f0, config_db) ≈ 0.0f0 atol=1e-5
+        @test Tracking._to_display_scale(0.1f0, config_db) ≈ -20.0f0 atol=1e-5
+        @test Tracking._to_display_scale(0.5f0, config_db) ≈ -6.0206f0 atol=1e-3
+        
+        # Very small values should be clamped to avoid -Inf
+        @test Tracking._to_display_scale(0.0f0, config_db) < -100.0f0
+        @test Tracking._to_display_scale(1.0f-12, config_db) < -100.0f0
+    end
+    
+    @testset "update! with FFT engine" begin
+        sr = 44100
+        nfft = 512
+        freq = 1000.0
+        engine = FFTEngine(nfft, sr)
+        
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        process!(engine, samples)
+        
+        config = DisplayConfig(
+            freq_scale=LinearScale(),
+            mag_scale=DecibelMagnitude(),
+            min_freq=0.0,
+            max_freq=22050.0
+        )
+        display = SpectrumDisplay(config, engine=engine)
+        
+        # Update the display
+        update!(display, engine)
+        
+        # Check that observables were updated
+        freqs = Tracking.frequency_data(display)
+        mags = Tracking.magnitude_data(display)
+        
+        @test length(freqs) > 0
+        @test length(mags) == length(freqs)
+        @test all(freqs .>= config.min_freq)
+        @test all(freqs .<= config.max_freq)
+        
+        # With a 1 kHz sine wave, there should be a peak near 1 kHz
+        peak_mag = maximum(mags)
+        @test peak_mag > -40.0f0  # Should be a strong peak
+    end
+    
+    @testset "update! with explicit data" begin
+        config = DisplayConfig(
+            freq_scale=LinearScale(),
+            mag_scale=LinearMagnitude(),
+            min_freq=0.0,  # Include DC so all test data passes through
+            max_freq=500.0
+        )
+        display = SpectrumDisplay(config)
+        
+        freqs = Float32[0.0, 100.0, 200.0, 300.0, 400.0]
+        mags = Float32[0.0, 1.0, 2.0, 1.0, 0.0]
+        
+        update!(display, FFTEngine(8, 44100); freqs=freqs, mags=mags)
+        
+        @test Tracking.frequency_data(display) == freqs
+        @test Tracking.magnitude_data(display) == mags
+    end
+    
+    @testset "Peak hold" begin
+        config = DisplayConfig(peak_hold=true)
+        display = SpectrumDisplay(config)
+        
+        # Initially peaks should be -Inf
+        peaks = Tracking.peak_data(display)
+        @test all(peaks .== -Inf)
+        
+        # After reset, same thing
+        reset_peaks!(display)
+        peaks = Tracking.peak_data(display)
+        @test all(peaks .== -Inf)
+    end
+    
+    @testset "Display configuration methods" begin
+        engine = FFTEngine(256, 44100)
+        display = SpectrumDisplay(engine=engine)
+        
+        @testset "set_freq_limits!" begin
+            set_freq_limits!(display, 100.0, 5000.0)
+            @test display.config.min_freq == 100.0f0
+            @test display.config.max_freq == 5000.0f0
+        end
+        
+        @testset "set_mag_limits!" begin
+            set_mag_limits!(display, -100.0, 10.0)
+            # Just verify it doesn't error
+            @test true
+        end
+        
+        @testset "set_title!" begin
+            set_title!(display, "New Title")
+            @test display.config.title == "New Title"
+            @test display.ax.title[] == "New Title"
+        end
+    end
+    
+    @testset "Show" begin
+        engine = FFTEngine(512, 44100)
+        display = SpectrumDisplay(engine=engine)
+        
+        io = IOBuffer()
+        show(io, display)
+        str = String(take!(io))
+        @test occursin("SpectrumDisplay", str)
+        @test occursin("LogScale", str)
+        @test occursin("DecibelMagnitude", str)
+        @test occursin("running=false", str)
+    end
+    
+    @testset "Start/stop lifecycle" begin
+        config = DisplayConfig(refresh_rate=60.0)
+        display = SpectrumDisplay(config)
+        
+        @test !isrunning(display)
+        
+        # Start without capture (manual mode)
+        start!(display)
+        @test isrunning(display)
+        
+        stop!(display)
+        @test !isrunning(display)
+    end
+    
+    @testset "Integration with AudioCapture + FFTEngine" begin
+        # Create a ringbuffer and populate it with test data
+        rb = RingBuffer{Float32}(4096)
+        sr = 44100
+        nfft = 1024
+        
+        # Generate a multi-frequency test signal
+        freq1 = 500.0
+        freq2 = 2000.0
+        t = [i / sr for i in 0:4095]
+        samples = Float32[
+            0.7 * sin(2π * freq1 * ti) + 0.3 * sin(2π * freq2 * ti)
+            for ti in t
+        ]
+        overwrite!(rb, samples)
+        
+        engine = FFTEngine(nfft, sr)
+        
+        # Process from ringbuffer
+        spectrum = process!(engine, rb)
+        @test length(spectrum) == nfft ÷ 2 + 1
+        
+        # Create display and update
+        config = DisplayConfig(
+            min_freq=20.0,
+            max_freq=10000.0,
+            freq_scale=LogScale()
+        )
+        display = SpectrumDisplay(config, engine=engine)
+        update!(display, engine)
+        
+        freqs = Tracking.frequency_data(display)
+        mags = Tracking.magnitude_data(display)
+        
+        @test length(freqs) > 0
+        @test length(mags) == length(freqs)
+        
+        # Verify frequency range filtering
+        @test all(freqs .>= 20.0f0)
+        @test all(freqs .<= 10000.0f0)
+        
+        # Should have peaks (signal was not zero)
+        @test maximum(mags) > -80.0f0
+    end
+    
+end

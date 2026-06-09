@@ -26,6 +26,9 @@ include("harmonic.jl")
 # Phase 7: MIDI export of detected notes
 include("midi.jl")
 
+# Phase 8: CV output via audio interface DC coupling
+include("cv.jl")
+
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
 export AudioCapture, start!, stop!, isrunning, sample_rate, channels, buffer_size, latency_samples, latency_ms
@@ -81,5 +84,22 @@ export export_midi, export_frequencies
 export note_names, tempo_to_bpm, set_bpm!
 export note_count, pitch_range, notes_to_matrix
 export print_notes, validate_midi, midi_info
+
+# Phase 8 exports
+export CVOutput, CVOutputConfig, CVChannelConfig, CVSignalState
+export CVChannelType, PitchCV, GateCV, TriggerCV, VelocityCV, ModulationCV
+export VoltageRange, BIPOLAR_5V, BIPOLAR_10V, UNIPOLAR_10V, UNIPOLAR_5V
+export start!, stop!, isrunning, reset!
+export set_pitch!, set_midi_pitch!, set_gate!, set_velocity!
+export output_series!, output_peak!, output_series_list!
+export release_gates!, trigger!
+export generate_samples, generate_pitch_cv, generate_gate_cv, generate_trigger_cv
+export generate_ramp
+export midi_to_voltage, freq_to_voltage, voltage_to_sample, sample_to_voltage
+export voltage_to_midi, voltage_to_freq, clamp_voltage
+export current_voltage, current_voltages, gate_active
+export series_to_cv, peak_to_cv
+export eurorack_config, test_cv_config
+export print_cv_state
 
 end # module

@@ -96,9 +96,457 @@ using Tracking
             producer = @async begin
                 for i in 1:5000
                     push!(rb, Float32(i))
-                end
-            end
+    end
+    
+end
+
+@testset "Phase 7: MIDI Export" begin
+    
+    @testset "MIDINote struct" begin
+        
+        @testset "Construction" begin
+            note = MIDINote(69, 100, 0, 480)
+            @test note.pitch == 0x45
+            @test note.velocity == 100
+            @test note.start_time == 0
+            @test note.duration == 480
+            @test note.channel == 0
+        end
+        
+        @testset "Clamping" begin
+            note = MIDINote(200, 200, -10, -5)
+            @test note.pitch == 127
+            @test note.velocity == 127
+            @test note.start_time == 0
+            @test note.duration == 0
+        end
+        
+        @testset "Show" begin
+            note = MIDINote(60, 100, 0, 480)
+            io = IOBuffer()
+            show(io, note)
+            str = String(take!(io))
+            @test occursin("MIDINote", str)
+            @test occursin("pitch=60", str)
+        end
+    end
+    
+    @testset "MIDIExporter construction" begin
+        
+        @testset "Default parameters" begin
+            exporter = MIDIExporter()
+            @test exporter.ticks_per_quarter == 480
+            @test exporter.tempo == 500000
+            @test exporter.default_velocity == 100
+            @test exporter.note_duration == 480
+            @test exporter.min_velocity == 40
+            @test exporter.max_velocity == 127
+            @test exporter.time_spacing == 480
+            @test exporter.format == 0
+        end
+        
+        @testset "Custom parameters" begin
+            exporter = MIDIExporter(
+                ticks_per_quarter=960,
+                tempo=600000,
+                default_velocity=80,
+                note_duration=240,
+                min_velocity=30,
+                max_velocity=120,
+                time_spacing=960,
+                format=1
+            )
+            @test exporter.ticks_per_quarter == 960
+            @test exporter.tempo == 600000
+            @test exporter.default_velocity == 80
+            @test exporter.note_duration == 240
+            @test exporter.min_velocity == 30
+            @test exporter.max_velocity == 120
+            @test exporter.time_spacing == 960
+            @test exporter.format == 1
+        end
+        
+        @testset "Velocity clamping" begin
+            exporter = MIDIExporter(min_velocity=-10, max_velocity=200)
+            @test exporter.min_velocity == 0
+            @test exporter.max_velocity == 127
+        end
+        
+        @testset "Show" begin
+            exporter = MIDIExporter()
+            io = IOBuffer()
+            show(io, exporter)
+            str = String(take!(io))
+            @test occursin("MIDIExporter", str)
+            @test occursin("tpq=480", str)
+        end
+    end
+    
+    @testset "series_to_note" begin
+        exporter = MIDIExporter()
+        
+        @testset "A4 (440 Hz)" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
             
+            note = series_to_note(series, exporter)
+            @test note !== nothing
+            @test note.pitch == 69  # A4 = MIDI 69
+            @test note.velocity > 100  # High confidence -> high velocity
+            @test note.duration == 480
+        end
+        
+        @testset "C4 (261.63 Hz)" begin
+            series = HarmonicSeries(261.63, [
+                Harmonic(1, 261.63, 8.0, 15, 0.0, 0.85)
+            ], 0.85, 0.0)
+            
+            note = series_to_note(series, exporter)
+            @test note !== nothing
+            @test note.pitch == 60  # C4 = MIDI 60
+        end
+        
+        @testset "Out of range frequency" begin
+            # 0.1 Hz is below the lowest MIDI note (8.18 Hz = note 0)
+            series = HarmonicSeries(0.1, [
+                Harmonic(1, 0.1, 10.0, 1, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note = series_to_note(series, exporter)
+            @test note === nothing
+            
+            # 20000 Hz is above the highest MIDI note (~12543 Hz = note 127)
+            series_high = HarmonicSeries(20000.0, [
+                Harmonic(1, 20000.0, 10.0, 1, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note_high = series_to_note(series_high, exporter)
+            @test note_high === nothing
+        end
+        
+        @testset "Velocity mapping from confidence" begin
+            # Low confidence -> lower velocity
+            series_low = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 5.0, 20, 0.0, 0.3)
+            ], 0.3, 0.0)
+            
+            note_low = series_to_note(series_low, exporter)
+            @test note_low.velocity < exporter.default_velocity
+            
+            # High confidence -> higher velocity
+            series_high = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note_high = series_to_note(series_high, exporter)
+            @test note_high.velocity > note_low.velocity
+        end
+        
+        @testset "Custom start time and duration" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note = series_to_note(series, exporter; start_time=960, duration=240)
+            @test note.start_time == 960
+            @test note.duration == 240
+        end
+    end
+    
+    @testset "series_to_notes" begin
+        exporter = MIDIExporter(time_spacing=480)
+        
+        series_list = [
+            HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0),
+            HarmonicSeries(880.0, [Harmonic(1, 880.0, 8.0, 40, 0.0, 0.90)], 0.90, 0.0),
+            HarmonicSeries(220.0, [Harmonic(1, 220.0, 6.0, 10, 0.0, 0.85)], 0.85, 0.0)
+        ]
+        
+        notes = series_to_notes(series_list, exporter)
+        
+        @test length(notes) == 3
+        
+        # Check pitches
+        @test notes[1].pitch == 69  # A4
+        @test notes[2].pitch == 81  # A5
+        @test notes[3].pitch == 57  # A3
+        
+        # Check spacing
+        @test notes[1].start_time == 0
+        @test notes[2].start_time == 480
+        @test notes[3].start_time == 960
+    end
+    
+    @testset "freq_to_note" begin
+        exporter = MIDIExporter()
+        
+        @testset "Valid frequency" begin
+            note = freq_to_note(440.0, exporter)
+            @test note !== nothing
+            @test note.pitch == 69
+            @test note.velocity == exporter.default_velocity
+        end
+        
+        @testset "Out of range" begin
+            @test freq_to_note(0.0, exporter) === nothing
+            @test freq_to_note(20000.0, exporter) === nothing
+        end
+        
+        @testset "Custom parameters" begin
+            note = freq_to_note(880.0, exporter; start_time=240, duration=120, velocity=80)
+            @test note.pitch == 81
+            @test note.start_time == 240
+            @test note.duration == 120
+            @test note.velocity == 80
+        end
+    end
+    
+    @testset "MIDI file export - single note" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_single.mid")
+            
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            result = export_midi(series, filepath)
+            @test result == filepath
+            @test isfile(filepath)
+            
+            # Validate the file
+            @test validate_midi(filepath)
+            
+            # Check header info
+            info = midi_info(filepath)
+            @test info !== nothing
+            fmt, ntracks, tpq = info
+            @test fmt == 0
+            @test ntracks == 1
+            @test tpq == 480
+        end
+    end
+    
+    @testset "MIDI file export - multiple notes" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_multi.mid")
+            
+            series_list = [
+                HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0),
+                HarmonicSeries(554.37, [Harmonic(1, 554.37, 8.0, 25, 0.0, 0.90)], 0.90, 0.0),  # C#5
+                HarmonicSeries(659.25, [Harmonic(1, 659.25, 6.0, 30, 0.0, 0.85)], 0.85, 0.0)   # E5
+            ]
+            
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "MIDI file export - from notes vector" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_notes.mid")
+            
+            notes = [
+                MIDINote(60, 100, 0, 480),
+                MIDINote(64, 100, 480, 480),
+                MIDINote(67, 100, 960, 480)
+            ]
+            
+            result = export_midi(notes, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "export_frequencies" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_freqs.mid")
+            
+            freqs = [440.0, 880.0, 220.0]
+            result = export_frequencies(freqs, filepath)
+            
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "note_names" begin
+        notes = [
+            MIDINote(69, 100, 0, 480),  # A4
+            MIDINote(60, 100, 0, 480),  # C4
+            MIDINote(72, 100, 0, 480)   # C5
+        ]
+        
+        names = note_names(notes)
+        @test length(names) == 3
+        @test names[1] == "A4"
+        @test names[2] == "C4"
+        @test names[3] == "C5"
+    end
+    
+    @testset "tempo_to_bpm and set_bpm!" begin
+        exporter = MIDIExporter()
+        
+        @testset "Default tempo" begin
+            bpm = tempo_to_bpm(exporter)
+            @test bpm ≈ 120.0 atol=0.1
+        end
+        
+        @testset "Set BPM" begin
+            set_bpm!(exporter, 60.0)
+            @test tempo_to_bpm(exporter) ≈ 60.0 atol=0.1
+            @test exporter.tempo == 1000000
+            
+            set_bpm!(exporter, 240.0)
+            @test tempo_to_bpm(exporter) ≈ 240.0 atol=0.1
+        end
+    end
+    
+    @testset "note_count and pitch_range" begin
+        notes = [
+            MIDINote(60, 100, 0, 480),
+            MIDINote(72, 100, 480, 480),
+            MIDINote(48, 100, 960, 480)
+        ]
+        
+        @test note_count(notes) == 3
+        
+        min_pitch, max_pitch = pitch_range(notes)
+        @test min_pitch == 48
+        @test max_pitch == 72
+    end
+    
+    @testset "Empty notes" begin
+        empty_notes = MIDINote[]
+        @test note_count(empty_notes) == 0
+        @test pitch_range(empty_notes) == (0, 0)
+    end
+    
+    @testset "notes_to_matrix" begin
+        notes = [
+            MIDINote(60, 100, 0, 480),
+            MIDINote(64, 90, 480, 240)
+        ]
+        
+        mat = notes_to_matrix(notes)
+        @test size(mat) == (2, 4)
+        @test mat[1, 1] == 60
+        @test mat[1, 2] == 100
+        @test mat[1, 3] == 0
+        @test mat[1, 4] == 480
+        @test mat[2, 1] == 64
+        @test mat[2, 2] == 90
+        @test mat[2, 3] == 480
+        @test mat[2, 4] == 240
+    end
+    
+    @testset "print_notes" begin
+        notes = [
+            MIDINote(69, 100, 0, 480),
+            MIDINote(72, 100, 480, 480)
+        ]
+        
+        # Just verify it doesn't error
+        @test (print_notes(notes); true)
+        @test (print_notes(notes; max_display=1); true)
+    end
+    
+    @testset "validate_midi edge cases" begin
+        mktempdir() do tmpdir
+            # Non-existent file
+            @test validate_midi(joinpath(tmpdir, "nonexistent.mid")) == false
+            
+            # Invalid file
+            bad_file = joinpath(tmpdir, "bad.mid")
+            write(bad_file, "not a midi file")
+            @test validate_midi(bad_file) == false
+        end
+    end
+    
+    @testset "midi_info edge cases" begin
+        mktempdir() do tmpdir
+            # Non-existent file
+            @test midi_info(joinpath(tmpdir, "nonexistent.mid")) === nothing
+            
+            # Invalid file
+            bad_file = joinpath(tmpdir, "bad.mid")
+            write(bad_file, "not a midi file")
+            @test midi_info(bad_file) === nothing
+        end
+    end
+    
+    @testset "Integration with harmonic detection" begin
+        sr = 44100
+        nfft = 4096
+        
+        # Create a signal with harmonics: 440 Hz fundamental
+        f0 = 440.0
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=50.0)
+        tracker = HarmonicTracker(min_harmonics=2, min_confidence=0.3)
+        
+        series_list = find_harmonic_series!(tracker, detector, engine)
+        
+        @test length(series_list) >= 1
+        
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "detected.mid")
+            
+            # Export detected harmonics
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+            
+            # Verify the exported note is near A4
+            notes = series_to_notes(series_list, MIDIExporter())
+            @test length(notes) >= 1
+            @test abs(Int(notes[1].pitch) - 69) <= 1  # Should be A4 or very close
+        end
+    end
+    
+    @testset "Integration with detect_harmonics" begin
+        sr = 44100
+        nfft = 2048
+        f0 = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        series_list = detect_harmonics(engine;
+            peak_kwargs=Dict(:snr_threshold => 3.0, :min_peak_distance => 50.0),
+            harmonic_kwargs=Dict(:min_harmonics => 2, :min_confidence => 0.2)
+        )
+        
+        @test length(series_list) >= 1
+        
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "integrated.mid")
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+end
             # Consumer task
             consumer = @async begin
                 count = 0
@@ -2216,6 +2664,454 @@ end
         series = series_list[1]
         @test harmonic_count(series) >= 3
         @test inharmonicity(series) > 0.0f0  # Should detect some inharmonicity
+    end
+    
+end
+
+@testset "Phase 7: MIDI Export" begin
+    
+    @testset "MIDINote struct" begin
+        
+        @testset "Construction" begin
+            note = MIDINote(69, 100, 0, 480)
+            @test note.pitch == 0x45
+            @test note.velocity == 100
+            @test note.start_time == 0
+            @test note.duration == 480
+            @test note.channel == 0
+        end
+        
+        @testset "Clamping" begin
+            note = MIDINote(200, 200, -10, -5)
+            @test note.pitch == 127
+            @test note.velocity == 127
+            @test note.start_time == 0
+            @test note.duration == 0
+        end
+        
+        @testset "Show" begin
+            note = MIDINote(60, 100, 0, 480)
+            io = IOBuffer()
+            show(io, note)
+            str = String(take!(io))
+            @test occursin("MIDINote", str)
+            @test occursin("pitch=60", str)
+        end
+    end
+    
+    @testset "MIDIExporter construction" begin
+        
+        @testset "Default parameters" begin
+            exporter = MIDIExporter()
+            @test exporter.ticks_per_quarter == 480
+            @test exporter.tempo == 500000
+            @test exporter.default_velocity == 100
+            @test exporter.note_duration == 480
+            @test exporter.min_velocity == 40
+            @test exporter.max_velocity == 127
+            @test exporter.time_spacing == 480
+            @test exporter.format == 0
+        end
+        
+        @testset "Custom parameters" begin
+            exporter = MIDIExporter(
+                ticks_per_quarter=960,
+                tempo=600000,
+                default_velocity=80,
+                note_duration=240,
+                min_velocity=30,
+                max_velocity=120,
+                time_spacing=960,
+                format=1
+            )
+            @test exporter.ticks_per_quarter == 960
+            @test exporter.tempo == 600000
+            @test exporter.default_velocity == 80
+            @test exporter.note_duration == 240
+            @test exporter.min_velocity == 30
+            @test exporter.max_velocity == 120
+            @test exporter.time_spacing == 960
+            @test exporter.format == 1
+        end
+        
+        @testset "Velocity clamping" begin
+            exporter = MIDIExporter(min_velocity=-10, max_velocity=200)
+            @test exporter.min_velocity == 0
+            @test exporter.max_velocity == 127
+        end
+        
+        @testset "Show" begin
+            exporter = MIDIExporter()
+            io = IOBuffer()
+            show(io, exporter)
+            str = String(take!(io))
+            @test occursin("MIDIExporter", str)
+            @test occursin("tpq=480", str)
+        end
+    end
+    
+    @testset "series_to_note" begin
+        exporter = MIDIExporter()
+        
+        @testset "A4 (440 Hz)" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note = series_to_note(series, exporter)
+            @test note !== nothing
+            @test note.pitch == 69  # A4 = MIDI 69
+            @test note.velocity > 100  # High confidence -> high velocity
+            @test note.duration == 480
+        end
+        
+        @testset "C4 (261.63 Hz)" begin
+            series = HarmonicSeries(261.63, [
+                Harmonic(1, 261.63, 8.0, 15, 0.0, 0.85)
+            ], 0.85, 0.0)
+            
+            note = series_to_note(series, exporter)
+            @test note !== nothing
+            @test note.pitch == 60  # C4 = MIDI 60
+        end
+        
+        @testset "Out of range frequency" begin
+            # 0.1 Hz is below the lowest MIDI note (8.18 Hz = note 0)
+            series = HarmonicSeries(0.1, [
+                Harmonic(1, 0.1, 10.0, 1, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note = series_to_note(series, exporter)
+            @test note === nothing
+            
+            # 20000 Hz is above the highest MIDI note (~12543 Hz = note 127)
+            series_high = HarmonicSeries(20000.0, [
+                Harmonic(1, 20000.0, 10.0, 1, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note_high = series_to_note(series_high, exporter)
+            @test note_high === nothing
+        end
+        
+        @testset "Velocity mapping from confidence" begin
+            # Low confidence -> lower velocity
+            series_low = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 5.0, 20, 0.0, 0.3)
+            ], 0.3, 0.0)
+            
+            note_low = series_to_note(series_low, exporter)
+            @test note_low.velocity < exporter.default_velocity
+            
+            # High confidence -> higher velocity
+            series_high = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note_high = series_to_note(series_high, exporter)
+            @test note_high.velocity > note_low.velocity
+        end
+        
+        @testset "Custom start time and duration" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note = series_to_note(series, exporter; start_time=960, duration=240)
+            @test note.start_time == 960
+            @test note.duration == 240
+        end
+    end
+    
+    @testset "series_to_notes" begin
+        exporter = MIDIExporter(time_spacing=480)
+        
+        series_list = [
+            HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0),
+            HarmonicSeries(880.0, [Harmonic(1, 880.0, 8.0, 40, 0.0, 0.90)], 0.90, 0.0),
+            HarmonicSeries(220.0, [Harmonic(1, 220.0, 6.0, 10, 0.0, 0.85)], 0.85, 0.0)
+        ]
+        
+        notes = series_to_notes(series_list, exporter)
+        
+        @test length(notes) == 3
+        
+        # Check pitches
+        @test notes[1].pitch == 69  # A4
+        @test notes[2].pitch == 81  # A5
+        @test notes[3].pitch == 57  # A3
+        
+        # Check spacing
+        @test notes[1].start_time == 0
+        @test notes[2].start_time == 480
+        @test notes[3].start_time == 960
+    end
+    
+    @testset "freq_to_note" begin
+        exporter = MIDIExporter()
+        
+        @testset "Valid frequency" begin
+            note = freq_to_note(440.0, exporter)
+            @test note !== nothing
+            @test note.pitch == 69
+            @test note.velocity == exporter.default_velocity
+        end
+        
+        @testset "Out of range" begin
+            @test freq_to_note(0.0, exporter) === nothing
+            @test freq_to_note(20000.0, exporter) === nothing
+        end
+        
+        @testset "Custom parameters" begin
+            note = freq_to_note(880.0, exporter; start_time=240, duration=120, velocity=80)
+            @test note.pitch == 81
+            @test note.start_time == 240
+            @test note.duration == 120
+            @test note.velocity == 80
+        end
+    end
+    
+    @testset "MIDI file export - single note" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_single.mid")
+            
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            result = export_midi(series, filepath)
+            @test result == filepath
+            @test isfile(filepath)
+            
+            # Validate the file
+            @test validate_midi(filepath)
+            
+            # Check header info
+            info = midi_info(filepath)
+            @test info !== nothing
+            fmt, ntracks, tpq = info
+            @test fmt == 0
+            @test ntracks == 1
+            @test tpq == 480
+        end
+    end
+    
+    @testset "MIDI file export - multiple notes" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_multi.mid")
+            
+            series_list = [
+                HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0),
+                HarmonicSeries(554.37, [Harmonic(1, 554.37, 8.0, 25, 0.0, 0.90)], 0.90, 0.0),  # C#5
+                HarmonicSeries(659.25, [Harmonic(1, 659.25, 6.0, 30, 0.0, 0.85)], 0.85, 0.0)   # E5
+            ]
+            
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "MIDI file export - from notes vector" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_notes.mid")
+            
+            notes = [
+                MIDINote(60, 100, 0, 480),
+                MIDINote(64, 100, 480, 480),
+                MIDINote(67, 100, 960, 480)
+            ]
+            
+            result = export_midi(notes, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "export_frequencies" begin
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "test_freqs.mid")
+            
+            freqs = [440.0, 880.0, 220.0]
+            result = export_frequencies(freqs, filepath)
+            
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
+    end
+    
+    @testset "note_names" begin
+        notes = [
+            MIDINote(69, 100, 0, 480),  # A4
+            MIDINote(60, 100, 0, 480),  # C4
+            MIDINote(72, 100, 0, 480)   # C5
+        ]
+        
+        names = note_names(notes)
+        @test length(names) == 3
+        @test names[1] == "A4"
+        @test names[2] == "C4"
+        @test names[3] == "C5"
+    end
+    
+    @testset "tempo_to_bpm and set_bpm!" begin
+        exporter = MIDIExporter()
+        
+        @testset "Default tempo" begin
+            bpm = tempo_to_bpm(exporter)
+            @test bpm ≈ 120.0 atol=0.1
+        end
+        
+        @testset "Set BPM" begin
+            set_bpm!(exporter, 60.0)
+            @test tempo_to_bpm(exporter) ≈ 60.0 atol=0.1
+            @test exporter.tempo == 1000000
+            
+            set_bpm!(exporter, 240.0)
+            @test tempo_to_bpm(exporter) ≈ 240.0 atol=0.1
+        end
+    end
+    
+    @testset "note_count and pitch_range" begin
+        notes = [
+            MIDINote(60, 100, 0, 480),
+            MIDINote(72, 100, 480, 480),
+            MIDINote(48, 100, 960, 480)
+        ]
+        
+        @test note_count(notes) == 3
+        
+        min_pitch, max_pitch = pitch_range(notes)
+        @test min_pitch == 48
+        @test max_pitch == 72
+    end
+    
+    @testset "Empty notes" begin
+        empty_notes = MIDINote[]
+        @test note_count(empty_notes) == 0
+        @test pitch_range(empty_notes) == (0, 0)
+    end
+    
+    @testset "notes_to_matrix" begin
+        notes = [
+            MIDINote(60, 100, 0, 480),
+            MIDINote(64, 90, 480, 240)
+        ]
+        
+        mat = notes_to_matrix(notes)
+        @test size(mat) == (2, 4)
+        @test mat[1, 1] == 60
+        @test mat[1, 2] == 100
+        @test mat[1, 3] == 0
+        @test mat[1, 4] == 480
+        @test mat[2, 1] == 64
+        @test mat[2, 2] == 90
+        @test mat[2, 3] == 480
+        @test mat[2, 4] == 240
+    end
+    
+    @testset "print_notes" begin
+        notes = [
+            MIDINote(69, 100, 0, 480),
+            MIDINote(72, 100, 480, 480)
+        ]
+        
+        # Just verify it doesn't error
+        @test (print_notes(notes); true)
+        @test (print_notes(notes; max_display=1); true)
+    end
+    
+    @testset "validate_midi edge cases" begin
+        mktempdir() do tmpdir
+            # Non-existent file
+            @test validate_midi(joinpath(tmpdir, "nonexistent.mid")) == false
+            
+            # Invalid file
+            bad_file = joinpath(tmpdir, "bad.mid")
+            write(bad_file, "not a midi file")
+            @test validate_midi(bad_file) == false
+        end
+    end
+    
+    @testset "midi_info edge cases" begin
+        mktempdir() do tmpdir
+            # Non-existent file
+            @test midi_info(joinpath(tmpdir, "nonexistent.mid")) === nothing
+            
+            # Invalid file
+            bad_file = joinpath(tmpdir, "bad.mid")
+            write(bad_file, "not a midi file")
+            @test midi_info(bad_file) === nothing
+        end
+    end
+    
+    @testset "Integration with harmonic detection" begin
+        sr = 44100
+        nfft = 4096
+        
+        # Create a signal with harmonics: 440 Hz fundamental
+        f0 = 440.0
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=50.0)
+        tracker = HarmonicTracker(min_harmonics=2, min_confidence=0.3)
+        
+        series_list = find_harmonic_series!(tracker, detector, engine)
+        
+        @test length(series_list) >= 1
+        
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "detected.mid")
+            
+            # Export detected harmonics
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+            
+            # Verify the exported note is near A4
+            notes = series_to_notes(series_list, MIDIExporter())
+            @test length(notes) >= 1
+            @test abs(Int(notes[1].pitch) - 69) <= 1  # Should be A4 or very close
+        end
+    end
+    
+    @testset "Integration with detect_harmonics" begin
+        sr = 44100
+        nfft = 2048
+        f0 = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        series_list = detect_harmonics(engine;
+            peak_kwargs=Dict(:snr_threshold => 3.0, :min_peak_distance => 50.0),
+            harmonic_kwargs=Dict(:min_harmonics => 2, :min_confidence => 0.2)
+        )
+        
+        @test length(series_list) >= 1
+        
+        mktempdir() do tmpdir
+            filepath = joinpath(tmpdir, "integrated.mid")
+            result = export_midi(series_list, filepath)
+            @test isfile(filepath)
+            @test validate_midi(filepath)
+        end
     end
     
 end

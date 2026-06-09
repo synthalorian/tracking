@@ -812,3 +812,269 @@ end
     end
     
 end
+
+@testset "Phase 4: Waterfall / Spectrogram" begin
+    
+    @testset "WaterfallConfig" begin
+        
+        @testset "Default construction" begin
+            config = WaterfallConfig()
+            @test config.time_history == 100
+            @test config.min_freq == 20.0f0
+            @test config.max_freq == 22050.0f0
+            @test config.db_range == 80.0f0
+            @test config.db_ref == 1.0f0
+            @test config.refresh_rate == 30.0f0
+            @test config.colormap == :viridis
+            @test config.title == "Spectrogram"
+        end
+        
+        @testset "Custom construction" begin
+            config = WaterfallConfig(
+                time_history=50,
+                min_freq=100.0,
+                max_freq=10000.0,
+                db_range=60.0,
+                db_ref=0.5,
+                refresh_rate=60.0,
+                colormap=:plasma,
+                title="Custom Waterfall"
+            )
+            @test config.time_history == 50
+            @test config.min_freq == 100.0f0
+            @test config.max_freq == 10000.0f0
+            @test config.db_range == 60.0f0
+            @test config.db_ref == 0.5f0
+            @test config.refresh_rate == 60.0f0
+            @test config.colormap == :plasma
+            @test config.title == "Custom Waterfall"
+        end
+    end
+    
+    @testset "WaterfallDisplay construction" begin
+        engine = FFTEngine(1024, 44100)
+        
+        @testset "With config" begin
+            config = WaterfallConfig(time_history=50)
+            display = WaterfallDisplay(config, engine)
+            
+            @test display.config.time_history == 50
+            @test !display.running
+            @test display.task === nothing
+            @test display.frame_count == 0
+            @test length(display.freqs) > 0
+        end
+        
+        @testset "Convenience constructor" begin
+            display = WaterfallDisplay(engine; time_history=75)
+            @test display.config.time_history == 75
+            @test length(display.freqs) > 0
+        end
+    end
+    
+    @testset "push_frame!" begin
+        engine = FFTEngine(512, 44100)
+        display = WaterfallDisplay(engine; time_history=10)
+        
+        # Get initial magnitude spectrum
+        samples = rand(Float32, 512)
+        process!(engine, samples)
+        mags = magnitude_spectrum(engine; corrected=true)
+        
+        # Push frame
+        push_frame!(display, mags)
+        @test display.frame_count == 1
+        
+        # Push more frames
+        for i in 1:5
+            samples = rand(Float32, 512)
+            process!(engine, samples)
+            mags = magnitude_spectrum(engine; corrected=true)
+            push_frame!(display, mags)
+        end
+        
+        @test display.frame_count == 6
+        
+        # Check spectrogram data shape
+        data = Tracking.spectrogram_data(display)
+        @test size(data, 1) == length(display.freqs)
+        @test size(data, 2) == 10  # time_history
+    end
+    
+    @testset "update! with engine" begin
+        sr = 44100
+        nfft = 512
+        freq = 1000.0
+        engine = FFTEngine(nfft, sr)
+        display = WaterfallDisplay(engine; time_history=20)
+        
+        # Generate sine wave and process
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[sin(2π * freq * ti) for ti in t]
+        process!(engine, samples)
+        
+        # Update display
+        update!(display, engine)
+        @test display.frame_count == 1
+        
+        data = Tracking.spectrogram_data(display)
+        @test size(data, 2) == 20
+    end
+    
+    @testset "reset!" begin
+        engine = FFTEngine(256, 44100)
+        display = WaterfallDisplay(engine; time_history=10)
+        
+        # Push some frames
+        for i in 1:5
+            samples = rand(Float32, 256)
+            process!(engine, samples)
+            update!(display, engine)
+        end
+        
+        @test display.frame_count == 5
+        
+        # Reset
+        reset!(display)
+        @test display.frame_count == 0
+        
+        data = Tracking.spectrogram_data(display)
+        # All values should be at minimum (-db_range)
+        @test all(data .== -display.config.db_range)
+    end
+    
+    @testset "frequency_data" begin
+        engine = FFTEngine(512, 44100)
+        display = WaterfallDisplay(engine)
+        
+        freqs = Tracking.frequency_data(display)
+        @test length(freqs) > 0
+        @test freqs[1] >= display.config.min_freq
+        @test freqs[end] <= display.config.max_freq
+    end
+    
+    @testset "Display configuration methods" begin
+        engine = FFTEngine(256, 44100)
+        display = WaterfallDisplay(engine)
+        
+        @testset "set_freq_limits!" begin
+            set_freq_limits!(display, 100.0, 5000.0)
+            @test display.config.min_freq == 100.0f0
+            @test display.config.max_freq == 5000.0f0
+        end
+        
+        @testset "set_title!" begin
+            set_title!(display, "New Title")
+            @test display.config.title == "New Title"
+            @test display.ax.title[] == "New Title"
+        end
+    end
+    
+    @testset "Show" begin
+        engine = FFTEngine(512, 44100)
+        display = WaterfallDisplay(engine)
+        
+        io = IOBuffer()
+        show(io, display)
+        str = String(take!(io))
+        @test occursin("WaterfallDisplay", str)
+        @test occursin("time_history=100", str)
+        @test occursin("running=false", str)
+    end
+    
+    @testset "Start/stop lifecycle" begin
+        engine = FFTEngine(256, 44100)
+        display = WaterfallDisplay(engine)
+        
+        @test !isrunning(display)
+        
+        # Start in manual mode
+        start!(display)
+        @test isrunning(display)
+        
+        stop!(display)
+        @test !isrunning(display)
+    end
+    
+    @testset "Integration: Spectrum + Waterfall" begin
+        rb = RingBuffer{Float32}(4096)
+        sr = 44100
+        nfft = 1024
+        
+        # Generate test signal
+        freq1 = 500.0
+        freq2 = 2000.0
+        t = [i / sr for i in 0:4095]
+        samples = Float32[
+            0.7 * sin(2π * freq1 * ti) + 0.3 * sin(2π * freq2 * ti)
+            for ti in t
+        ]
+        overwrite!(rb, samples)
+        
+        engine = FFTEngine(nfft, sr)
+        
+        # Process from ringbuffer
+        spectrum = process!(engine, rb)
+        @test length(spectrum) == nfft ÷ 2 + 1
+        
+        # Create both displays with matching frequency ranges
+        config = DisplayConfig(min_freq=20.0, max_freq=10000.0)
+        spectrum_display = SpectrumDisplay(config, engine=engine)
+        wf_config = WaterfallConfig(min_freq=20.0, max_freq=10000.0, time_history=50)
+        waterfall_display = WaterfallDisplay(wf_config, engine)
+        
+        # Update both
+        update!(spectrum_display, engine)
+        update!(waterfall_display, engine)
+        
+        # Verify spectrum data
+        freqs = Tracking.frequency_data(spectrum_display)
+        mags = Tracking.magnitude_data(spectrum_display)
+        @test length(freqs) > 0
+        @test length(mags) == length(freqs)
+        
+        # Verify waterfall data
+        wf_data = Tracking.spectrogram_data(waterfall_display)
+        wf_freqs = Tracking.frequency_data(waterfall_display)
+        @test size(wf_data, 1) == length(wf_freqs)
+        @test size(wf_data, 2) == 50
+        
+        # Both should show the same frequency range
+        @test length(wf_freqs) == length(freqs)
+    end
+    
+    @testset "Live display loop (simulated)" begin
+        # Simulate a live capture + display loop without actual hardware
+        rb = RingBuffer{Float32}(4096)
+        sr = 44100
+        nfft = 512
+        engine = FFTEngine(nfft, sr)
+        
+        # Create displays
+        spectrum_display = SpectrumDisplay(engine=engine)
+        waterfall_display = WaterfallDisplay(engine; time_history=20)
+        
+        # Simulate a few frames of live data
+        freq = 1000.0
+        for frame in 1:10
+            # Generate frame of samples
+            phase = frame * 0.1
+            t = [i / sr for i in 0:(nfft - 1)]
+            samples = Float32[sin(2π * freq * ti + phase) for ti in t]
+            overwrite!(rb, samples)
+            
+            # Process and update
+            process!(engine, rb)
+            update!(spectrum_display, engine)
+            update!(waterfall_display, engine)
+        end
+        
+        # Verify displays were updated
+        @test Tracking.frame_count(waterfall_display) == 10
+        
+        mags = Tracking.magnitude_data(spectrum_display)
+        @test length(mags) > 0
+        @test maximum(mags) > -80.0f0  # Should have a peak
+    end
+    
+end

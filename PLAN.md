@@ -59,15 +59,19 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 
 ### Phase 4: Waterfall / spectrogram view
 
-**Goal:** Phase 4: Waterfall / spectrogram view
+**Goal:** Phase 4: Audio capture + FFT integration (live display loop)
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented `WaterfallDisplay` with real-time spectrogram heatmap using GLMakie
+- Live display loop integrates AudioCapture → RingBuffer → FFTEngine → SpectrumDisplay + WaterfallDisplay
+- Supports both demo mode (synthetic signal) and live microphone input
+- Frame history buffer for time-frequency visualization
+- Start/stop lifecycle for async update tasks 
 
 ---
 

@@ -14,6 +14,9 @@ include("fft.jl")
 # Phase 3: Real-time spectrum display (GLMakie)
 include("spectrum.jl")
 
+# Phase 4: Waterfall / spectrogram view
+include("waterfall.jl")
+
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
 export AudioCapture, start!, stop!, isrunning, sample_rate, channels, buffer_size, latency_samples, latency_ms
@@ -34,5 +37,10 @@ export LinearSpectrumDisplay, LogSpectrumDisplay
 export update!, display_figure, reset_peaks!
 export set_freq_limits!, set_mag_limits!, set_title!
 export frequency_data, magnitude_data, peak_data, screenshot
+
+# Phase 4 exports
+export WaterfallDisplay, WaterfallConfig
+export push_frame!, reset!
+export spectrogram_data, frame_count
 
 end # module

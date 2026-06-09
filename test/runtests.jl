@@ -1706,3 +1706,516 @@ end
     end
     
 end
+
+@testset "Phase 6: Harmonic Series Tracking" begin
+    
+    @testset "Harmonic struct" begin
+        
+        @testset "Construction" begin
+            h = Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            @test h.number == 1
+            @test h.frequency == 440.0f0
+            @test h.magnitude == 10.0f0
+            @test h.bin == 20
+            @test h.deviation == 0.0f0
+            @test h.confidence == 0.95f0
+        end
+        
+        @testset "Show" begin
+            h = Harmonic(2, 880.0, 5.0, 40, 0.5, 0.80)
+            io = IOBuffer()
+            show(io, h)
+            str = String(take!(io))
+            @test occursin("H2", str)
+            @test occursin("880.0", str)
+        end
+    end
+    
+    @testset "HarmonicSeries struct" begin
+        
+        @testset "Construction" begin
+            h1 = Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            h2 = Harmonic(2, 880.0, 5.0, 40, 0.2, 0.85)
+            
+            series = HarmonicSeries(440.0, [h1, h2], 0.9, 0.001)
+            @test series.fundamental == 440.0f0
+            @test length(series.harmonics) == 2
+            @test series.overall_confidence == 0.9f0
+            @test series.inharmonicity == 0.001f0
+            @test series.frame_id == 0
+            @test series.series_id == 0
+        end
+        
+        @testset "With frame_id" begin
+            h1 = Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            series = HarmonicSeries(440.0, [h1], 0.9, 0.0, 5)
+            @test series.frame_id == 5
+        end
+        
+        @testset "Show" begin
+            h1 = Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            series = HarmonicSeries(440.0, [h1], 0.9, 0.001)
+            io = IOBuffer()
+            show(io, series)
+            str = String(take!(io))
+            @test occursin("HarmonicSeries", str)
+            @test occursin("440.0", str)
+        end
+    end
+    
+    @testset "HarmonicTracker construction" begin
+        
+        @testset "Default parameters" begin
+            ht = HarmonicTracker()
+            @test ht.max_harmonics == 10
+            @test ht.harmonic_tolerance == 0.03f0
+            @test ht.min_harmonics == 2
+            @test ht.min_fundamental == 20.0f0
+            @test ht.max_fundamental == 4000.0f0
+            @test ht.min_confidence == 0.3f0
+            @test ht.allow_missing_harmonics == true
+            @test ht.max_missing_harmonics == 2
+            @test ht.track_persistence == 1
+            @test ht.freq_tolerance_hz == 5.0f0
+            @test ht.frame_counter == 0
+            @test ht.next_series_id == 1
+            @test isempty(ht.tracked_series)
+        end
+        
+        @testset "Custom parameters" begin
+            ht = HarmonicTracker(
+                max_harmonics=15,
+                harmonic_tolerance=0.05,
+                min_harmonics=3,
+                min_fundamental=50.0,
+                max_fundamental=5000.0,
+                min_confidence=0.5,
+                allow_missing_harmonics=false,
+                max_missing_harmonics=1,
+                track_persistence=3,
+                freq_tolerance_hz=10.0
+            )
+            @test ht.max_harmonics == 15
+            @test ht.harmonic_tolerance == 0.05f0
+            @test ht.min_harmonics == 3
+            @test ht.min_fundamental == 50.0f0
+            @test ht.max_fundamental == 5000.0f0
+            @test ht.min_confidence == 0.5f0
+            @test ht.allow_missing_harmonics == false
+            @test ht.max_missing_harmonics == 1
+            @test ht.track_persistence == 3
+            @test ht.freq_tolerance_hz == 10.0f0
+        end
+        
+        @testset "Show" begin
+            ht = HarmonicTracker()
+            io = IOBuffer()
+            show(io, ht)
+            str = String(take!(io))
+            @test occursin("HarmonicTracker", str)
+            @test occursin("max_harm=10", str)
+        end
+    end
+    
+    @testset "find_harmonic_series - perfect harmonics" begin
+        # Create peaks that are perfect harmonics: 440, 880, 1320, 1760
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.0, 0.95, 25.0),
+            Peak(880.0, 5.0, 40, 0.0, 0.90, 22.0),
+            Peak(1320.0, 3.0, 60, 0.0, 0.85, 20.0),
+            Peak(1760.0, 2.0, 80, 0.0, 0.80, 18.0)
+        ]
+        
+        tracker = HarmonicTracker(min_harmonics=2, min_confidence=0.0)
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        @test length(series_list) >= 1
+        @test has_series(series_list)
+        
+        # The strongest series should have 440 Hz fundamental
+        strongest = strongest_series(series_list)
+        @test strongest !== nothing
+        @test strongest.fundamental ≈ 440.0f0 atol=5.0f0
+        @test harmonic_count(strongest) >= 2
+    end
+    
+    @testset "find_harmonic_series - multiple series" begin
+        # Two independent harmonic series
+        # Series 1: 440, 880, 1320
+        # Series 2: 660, 1320 (but 1320 is shared, so should be assigned to one)
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.0, 0.95, 25.0),   # Series 1: f0
+            Peak(660.0, 8.0, 30, 0.0, 0.92, 23.0),   # Series 2: f0
+            Peak(880.0, 5.0, 40, 0.0, 0.90, 22.0),   # Series 1: H2
+            Peak(1320.0, 3.0, 60, 0.0, 0.85, 20.0),  # Series 1: H3 (or Series 2: H2)
+            Peak(1760.0, 2.0, 80, 0.0, 0.80, 18.0)   # Series 1: H4
+        ]
+        
+        tracker = HarmonicTracker(min_harmonics=2, min_confidence=0.0)
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        @test length(series_list) >= 1
+        
+        # Should find the 440 Hz series with at least 3 harmonics
+        series_440 = filter(s -> abs(s.fundamental - 440.0) < 10.0, series_list)
+        if !isempty(series_440)
+            @test harmonic_count(series_440[1]) >= 3
+        end
+    end
+    
+    @testset "find_harmonic_series - with missing harmonics" begin
+        # Missing 3rd harmonic
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.0, 0.95, 25.0),
+            Peak(880.0, 5.0, 40, 0.0, 0.90, 22.0),
+            # 1320 missing
+            Peak(1760.0, 2.0, 80, 0.0, 0.80, 18.0)
+        ]
+        
+        tracker = HarmonicTracker(
+            min_harmonics=3,
+            allow_missing_harmonics=true,
+            max_missing_harmonics=2,
+            min_confidence=0.0
+        )
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        # Should still find the series with missing H3
+        @test length(series_list) >= 1
+        
+        series = series_list[1]
+        @test harmonic_count(series) >= 3
+    end
+    
+    @testset "find_harmonic_series - no valid series" begin
+        # Peaks that don't form harmonics
+        peaks = [
+            Peak(100.0, 10.0, 5, 0.0, 0.95, 25.0),
+            Peak(257.0, 8.0, 12, 0.0, 0.90, 22.0),
+            Peak(523.0, 5.0, 25, 0.0, 0.85, 20.0)
+        ]
+        
+        tracker = HarmonicTracker(min_harmonics=3, min_confidence=0.0)
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        # Should find no valid series with min_harmonics=3
+        @test length(series_list) == 0
+        @test !has_series(series_list)
+    end
+    
+    @testset "find_harmonic_series - stateless API" begin
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.0, 0.95, 25.0),
+            Peak(880.0, 5.0, 40, 0.0, 0.90, 22.0),
+            Peak(1320.0, 3.0, 60, 0.0, 0.85, 20.0)
+        ]
+        
+        series_list = find_harmonic_series(peaks; min_harmonics=2, min_confidence=0.0)
+        
+        @test length(series_list) >= 1
+        @test series_list[1].fundamental ≈ 440.0f0 atol=5.0f0
+    end
+    
+    @testset "find_harmonic_series - frequency range filtering" begin
+        # Fundamental below minimum
+        peaks = [
+            Peak(10.0, 10.0, 1, 0.0, 0.95, 25.0),
+            Peak(20.0, 5.0, 2, 0.0, 0.90, 22.0)
+        ]
+        
+        tracker = HarmonicTracker(min_fundamental=50.0, min_harmonics=2, min_confidence=0.0)
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        @test isempty(series_list)
+    end
+    
+    @testset "Harmonic series convenience functions" begin
+        h1 = Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+        h2 = Harmonic(2, 880.0, 5.0, 40, 0.2, 0.85)
+        h3 = Harmonic(3, 1320.0, 3.0, 60, -0.1, 0.75)
+        
+        series = HarmonicSeries(440.0, [h1, h2, h3], 0.85, 0.001)
+        
+        @test harmonic_count(series) == 3
+        @test harmonic_frequencies(series) == Float32[440.0, 880.0, 1320.0]
+        @test harmonic_magnitudes(series) == Float32[10.0, 5.0, 3.0]
+        @test harmonic_numbers(series) == [1, 2, 3]
+        @test fundamental_frequency(series) == 440.0f0
+        @test fundamental_magnitude(series) == 10.0f0
+        @test overall_confidence(series) == 0.85f0
+        @test inharmonicity(series) == 0.001f0
+        @test has_min_harmonics(series, 2) == true
+        @test has_min_harmonics(series, 5) == false
+        
+        # Average deviation (excluding fundamental)
+        avg_dev = average_deviation(series)
+        @test avg_dev >= 0.0f0
+    end
+    
+    @testset "Series filtering functions" begin
+        s1 = HarmonicSeries(440.0, [
+            Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95),
+            Harmonic(2, 880.0, 5.0, 40, 0.0, 0.90)
+        ], 0.92, 0.0001)
+        
+        s2 = HarmonicSeries(220.0, [
+            Harmonic(1, 220.0, 8.0, 10, 0.0, 0.90),
+            Harmonic(2, 440.0, 4.0, 20, 0.0, 0.85),
+            Harmonic(3, 660.0, 2.0, 30, 0.0, 0.80)
+        ], 0.85, 0.0002)
+        
+        s3 = HarmonicSeries(880.0, [
+            Harmonic(1, 880.0, 6.0, 40, 0.0, 0.88)
+        ], 0.88, 0.001)
+        
+        series_list = [s1, s2, s3]
+        
+        @test num_series(series_list) == 3
+        @test has_series(series_list) == true
+        
+        @testset "filter_by_harmonic_count" begin
+            filtered = filter_by_harmonic_count(series_list, 2)
+            @test length(filtered) == 2
+        end
+        
+        @testset "filter_by_inharmonicity" begin
+            filtered = filter_by_inharmonicity(series_list, 0.0005)
+            @test length(filtered) == 2
+        end
+        
+        @testset "filter_by_confidence" begin
+            filtered = filter_by_confidence(series_list, 0.87)
+            @test length(filtered) == 2
+        end
+        
+        @testset "filter_by_fundamental" begin
+            filtered = filter_by_fundamental(series_list, 300.0, 600.0)
+            @test length(filtered) == 1
+            @test filtered[1].fundamental == 440.0f0
+        end
+        
+        @testset "strongest_series" begin
+            strongest = strongest_series(series_list)
+            @test strongest !== nothing
+            @test strongest.overall_confidence == 0.92f0
+        end
+        
+        @testset "richest_series" begin
+            richest = richest_series(series_list)
+            @test richest !== nothing
+            @test length(richest.harmonics) == 3
+        end
+    end
+    
+    @testset "Note / pitch conversion" begin
+        
+        @testset "freq_to_midi" begin
+            @test freq_to_midi(440.0) ≈ 69.0f0 atol=0.01f0  # A4
+            @test freq_to_midi(880.0) ≈ 81.0f0 atol=0.01f0  # A5
+            @test freq_to_midi(220.0) ≈ 57.0f0 atol=0.01f0  # A3
+        end
+        
+        @testset "midi_to_freq" begin
+            @test midi_to_freq(69.0) ≈ 440.0f0 atol=0.1f0
+            @test midi_to_freq(81.0) ≈ 880.0f0 atol=0.1f0
+            @test midi_to_freq(60.0) ≈ 261.63f0 atol=0.1f0  # Middle C
+        end
+        
+        @testset "freq_to_note" begin
+            note, cents = freq_to_note(440.0)
+            @test note == "A4"
+            @test abs(cents) < 1.0f0
+            
+            note, cents = freq_to_note(261.63)
+            @test note == "C4"
+        end
+        
+        @testset "note_estimate" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            note, cents, midi = note_estimate(series)
+            @test note == "A4"
+            @test abs(cents) < 1.0f0
+            @test midi ≈ 69.0f0 atol=0.01f0
+        end
+        
+        @testset "Edge cases" begin
+            @test freq_to_midi(0.0) == 0.0f0
+            @test freq_to_midi(-100.0) == 0.0f0
+            note, cents = freq_to_note(0.0)
+            @test note == "N/A"
+        end
+    end
+    
+    @testset "Integration with FFTEngine and PeakDetector" begin
+        sr = 44100
+        nfft = 4096
+        
+        # Create a signal with harmonics: 440 Hz fundamental + 2nd, 3rd, 4th harmonics
+        f0 = 440.0
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti) +
+            0.2 * sin(2π * 4 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=50.0)
+        tracker = HarmonicTracker(min_harmonics=3, min_confidence=0.3)
+        
+        series_list = find_harmonic_series!(tracker, detector, engine)
+        
+        @test length(series_list) >= 1
+        @test has_series(series_list)
+        
+        # The strongest series should be near 440 Hz
+        strongest = strongest_series(series_list)
+        @test strongest !== nothing
+        @test strongest.fundamental ≈ f0 atol=10.0
+        @test harmonic_count(strongest) >= 3
+        
+        # Check that harmonics are near expected frequencies
+        harm_freqs = harmonic_frequencies(strongest)
+        @test any(f -> abs(f - f0) < 10.0, harm_freqs)
+        @test any(f -> abs(f - 2*f0) < 10.0, harm_freqs)
+        @test any(f -> abs(f - 3*f0) < 10.0, harm_freqs)
+    end
+    
+    @testset "detect_harmonics convenience function" begin
+        sr = 44100
+        nfft = 2048
+        f0 = 1000.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        series_list = detect_harmonics(engine;
+            peak_kwargs=Dict(:snr_threshold => 3.0, :min_peak_distance => 50.0),
+            harmonic_kwargs=Dict(:min_harmonics => 2, :min_confidence => 0.2)
+        )
+        
+        @test length(series_list) >= 1
+        
+        strongest = strongest_series(series_list)
+        @test strongest !== nothing
+        @test strongest.fundamental ≈ f0 atol=15.0
+    end
+    
+    @testset "Temporal tracking" begin
+        tracker = HarmonicTracker(track_persistence=1)
+        
+        # Frame 1: series at 440 Hz
+        series1 = [
+            HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95),
+                Harmonic(2, 880.0, 5.0, 40, 0.0, 0.90)
+            ], 0.92, 0.0001, 1)
+        ]
+        
+        tracked1 = track_harmonics!(tracker, series1)
+        @test length(tracked1) == 1
+        @test tracked1[1].series_id != 0  # Should have been assigned an ID
+        
+        # Frame 2: same series with slight drift
+        series2 = [
+            HarmonicSeries(441.0, [
+                Harmonic(1, 441.0, 9.5, 20, 0.0, 0.94),
+                Harmonic(2, 882.0, 4.8, 40, 0.0, 0.89)
+            ], 0.91, 0.0001, 2)
+        ]
+        
+        tracked2 = track_harmonics!(tracker, series2)
+        @test length(tracked2) == 1
+        # Should keep the same series ID
+        @test tracked2[1].series_id == tracked1[1].series_id
+    end
+    
+    @testset "Reset tracker" begin
+        tracker = HarmonicTracker()
+        tracker.frame_counter = 5
+        tracker.next_series_id = 10
+        tracker.tracked_series = [
+            HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0, 1, 1)
+        ]
+        
+        reset!(tracker)
+        
+        @test tracker.frame_counter == 0
+        @test tracker.next_series_id == 1
+        @test isempty(tracker.tracked_series)
+        @test isempty(tracker.series_history)
+    end
+    
+    @testset "Utility functions" begin
+        
+        @testset "series_to_matrix" begin
+            s1 = HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0)
+            s2 = HarmonicSeries(220.0, [Harmonic(1, 220.0, 8.0, 10, 0.0, 0.90)], 0.90, 0.0)
+            
+            mat = series_to_matrix([s1, s2])
+            @test size(mat) == (2, 4)
+            @test mat[1, 1] == 440.0f0
+            @test mat[2, 1] == 220.0f0
+        end
+        
+        @testset "print_series" begin
+            s1 = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95),
+                Harmonic(2, 880.0, 5.0, 40, 0.0, 0.90)
+            ], 0.92, 0.0001, 1, 1)
+            
+            # Just verify it doesn't error
+            @test (print_series([s1]); true)
+        end
+        
+        @testset "Empty series list" begin
+            empty_list = HarmonicSeries[]
+            
+            @test num_series(empty_list) == 0
+            @test has_series(empty_list) == false
+            @test strongest_series(empty_list) === nothing
+            @test richest_series(empty_list) === nothing
+            @test filter_by_harmonic_count(empty_list, 2) == HarmonicSeries[]
+        end
+    end
+    
+    @testset "Inharmonicity handling" begin
+        # Slightly inharmonic peaks (real instrument-like)
+        peaks = [
+            Peak(440.0, 10.0, 20, 0.0, 0.95, 25.0),
+            Peak(881.0, 5.0, 40, 0.02, 0.90, 22.0),   # Slightly sharp
+            Peak(1321.5, 3.0, 60, -0.05, 0.85, 20.0), # Slightly flat
+            Peak(1762.0, 2.0, 80, 0.01, 0.80, 18.0)   # Slightly sharp
+        ]
+        
+        tracker = HarmonicTracker(
+            harmonic_tolerance=0.02,
+            freq_tolerance_hz=5.0,
+            min_harmonics=3,
+            min_confidence=0.0
+        )
+        series_list = find_harmonic_series!(tracker, peaks)
+        
+        @test length(series_list) >= 1
+        
+        series = series_list[1]
+        @test harmonic_count(series) >= 3
+        @test inharmonicity(series) > 0.0f0  # Should detect some inharmonicity
+    end
+    
+end

@@ -106,12 +106,19 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 6: Harmonic series tracking
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
+- Implemented `Harmonic` and `HarmonicSeries` structs for representing detected harmonic families
+- `HarmonicTracker` with configurable tolerance, min harmonics, missing harmonic handling
+- Scoring algorithm prefers lower fundamentals that explain strong peaks (pitch perception model)
+- Overlapping series filtering keeps best non-overlapping sets
+- Temporal tracking with persistent series IDs across frames
+- Note/pitch conversion: `freq_to_midi`, `midi_to_freq`, `freq_to_note`, `note_estimate`
+- Integration with `PeakDetector` and `FFTEngine`
+- 124 tests covering perfect harmonics, multiple series, missing harmonics, inharmonicity, temporal tracking
 
 ---
 

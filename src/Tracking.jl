@@ -17,6 +17,9 @@ include("spectrum.jl")
 # Phase 4: Waterfall / spectrogram view
 include("waterfall.jl")
 
+# Phase 5: Peak detection algorithm
+include("peak.jl")
+
 # Phase 1 exports
 export RingBuffer, push!, popfirst!, isempty, isfull, length, capacity, available, empty!, peek, overwrite!
 export AudioCapture, start!, stop!, isrunning, sample_rate, channels, buffer_size, latency_samples, latency_ms
@@ -42,5 +45,13 @@ export frequency_data, magnitude_data, peak_data, screenshot
 export WaterfallDisplay, WaterfallConfig
 export push_frame!, reset!
 export spectrogram_data, frame_count
+
+# Phase 5 exports
+export Peak, PeakDetector
+export detect_peaks!, detect_peaks, find_peak
+export track_peaks!, reset!
+export peak_frequencies, peak_magnitudes, peak_bins
+export filter_by_confidence, filter_by_snr, top_peaks
+export num_peaks, has_peaks, peaks_to_matrix, print_peaks
 
 end # module

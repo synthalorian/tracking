@@ -369,14 +369,6 @@ mutable struct CVOutput
     device::Union{PortAudio.PortAudioDevice, Nothing}
 end
 
-"""Create a CVOutput without opening a stream (for testing/sequencing).
-
-Use this when you want to generate CV samples manually without hardware."""
-function CVOutput(config::CVOutputConfig=CVOutputConfig())
-    states = [CVSignalState() for _ in 1:config.channels]
-    return CVOutput(nothing, config, states, false, nothing, nothing)
-end
-
 """Create a CVOutput with a PortAudio output stream.
 
 Parameters:
@@ -386,26 +378,31 @@ Parameters:
 Returns: CVOutput with open stream."""
 function CVOutput(config::CVOutputConfig, device::PortAudio.PortAudioDevice)
     # Open output stream
-    stream = PortAudioStream(device, 0, config.buffer_size; 
-                            samplerate=config.sample_rate, 
+    stream = PortAudioStream(device, 0, config.buffer_size;
+                            samplerate=config.sample_rate,
                             nchannels=config.channels)
-    
+
     states = [CVSignalState() for _ in 1:config.channels]
     return CVOutput(stream, config, states, false, nothing, device)
 end
 
-"""Create a CVOutput with default device."""
-function CVOutput(config::CVOutputConfig=CVOutputConfig(); 
+"""Create a CVOutput.
+
+If `device` is `nothing` (the default), creates a CVOutput without opening a stream
+(for testing/sequencing). Otherwise, opens a PortAudio output stream with the
+specified device (or the first available device if `device` is not provided)."""
+function CVOutput(config::CVOutputConfig=CVOutputConfig();
                   device::Union{PortAudio.PortAudioDevice, Nothing}=nothing)
+    states = [CVSignalState() for _ in 1:config.channels]
+
     if device === nothing
-        devices = PortAudio.devices()
-        if isempty(devices)
-            error("No audio devices found")
-        end
-        device = first(devices)
+        return CVOutput(nothing, config, states, false, nothing, nothing)
     end
-    
-    return CVOutput(config, device)
+
+    stream = PortAudioStream(device, 0, config.buffer_size;
+                            samplerate=config.sample_rate,
+                            nchannels=config.channels)
+    return CVOutput(stream, config, states, false, nothing, device)
 end
 
 function Base.show(io::IO, cv::CVOutput)

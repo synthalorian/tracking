@@ -1,5 +1,8 @@
 # tracking
 
+![License](https://img.shields.io/badge/License-MIT-blue)
+![Language](https://img.shields.io/badge/Language-Julia-blue)
+
 > Real-time audio spectrum analyzer with waterfall displays, peak detection, and export to MIDI/CV. Jack/PipeWire native.
 
 **Language:** Julia  
@@ -39,17 +42,16 @@
 
 - Julia toolchain
 
-### Build
+### Install
 
 ```bash
-# See PLAN.md for detailed build instructions per phase
-cd tracking
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
 ### Run
 
 ```bash
-# See PLAN.md for run instructions
+julia --project=. src/main.jl
 ```
 
 ---

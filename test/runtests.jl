@@ -3115,3 +3115,488 @@ end
     end
     
 end
+
+@testset "Phase 8: CV Output" begin
+    
+    @testset "VoltageRange constants" begin
+        @test BIPOLAR_5V.min_v == -5.0f0
+        @test BIPOLAR_5V.max_v == 5.0f0
+        @test BIPOLAR_10V.min_v == -10.0f0
+        @test BIPOLAR_10V.max_v == 10.0f0
+        @test UNIPOLAR_10V.min_v == 0.0f0
+        @test UNIPOLAR_10V.max_v == 10.0f0
+        @test UNIPOLAR_5V.min_v == 0.0f0
+        @test UNIPOLAR_5V.max_v == 5.0f0
+    end
+    
+    @testset "CVChannelType hierarchy" begin
+        @test PitchCV() isa CVChannelType
+        @test GateCV() isa CVChannelType
+        @test TriggerCV() isa CVChannelType
+        @test VelocityCV() isa CVChannelType
+        @test ModulationCV() isa CVChannelType
+    end
+    
+    @testset "CVChannelConfig construction" begin
+        @testset "Default parameters" begin
+            config = CVChannelConfig()
+            @test config.channel_type isa PitchCV
+            @test config.voltage_range == BIPOLAR_5V
+            @test config.scale == 1.0f0
+            @test config.offset == 0.0f0
+            @test config.portamento_time == 0.0f0
+            @test config.midi_reference == 0
+        end
+        
+        @testset "Custom parameters" begin
+            config = CVChannelConfig(
+                channel_type=GateCV(),
+                voltage_range=UNIPOLAR_5V,
+                scale=2.0,
+                offset=1.0,
+                portamento_time=0.1,
+                midi_reference=60
+            )
+            @test config.channel_type isa GateCV
+            @test config.voltage_range == UNIPOLAR_5V
+            @test config.scale == 2.0f0
+            @test config.offset == 1.0f0
+            @test config.portamento_time == 0.1f0
+            @test config.midi_reference == 60
+        end
+        
+        @testset "Show" begin
+            config = CVChannelConfig(channel_type=PitchCV())
+            io = IOBuffer()
+            show(io, config)
+            str = String(take!(io))
+            @test occursin("CVChannelConfig", str)
+            @test occursin("PitchCV", str)
+        end
+    end
+    
+    @testset "CVOutputConfig construction" begin
+        @testset "Default parameters" begin
+            config = CVOutputConfig()
+            @test config.sample_rate == 44100
+            @test config.buffer_size == 256
+            @test config.channels == 2
+            @test length(config.channel_configs) == 2
+            @test config.channel_configs[1].channel_type isa PitchCV
+            @test config.channel_configs[2].channel_type isa GateCV
+            @test config.voltage_scale == 5.0f0
+            @test config.default_gate_voltage == 5.0f0
+            @test config.trigger_duration == 0.01f0
+        end
+        
+        @testset "Custom parameters" begin
+            configs = [
+                CVChannelConfig(channel_type=PitchCV()),
+                CVChannelConfig(channel_type=GateCV()),
+                CVChannelConfig(channel_type=VelocityCV())
+            ]
+            config = CVOutputConfig(
+                sample_rate=48000,
+                buffer_size=512,
+                channels=3,
+                channel_configs=configs,
+                voltage_scale=10.0,
+                default_gate_voltage=10.0,
+                trigger_duration=0.02
+            )
+            @test config.sample_rate == 48000
+            @test config.buffer_size == 512
+            @test config.channels == 3
+            @test length(config.channel_configs) == 3
+            @test config.voltage_scale == 10.0f0
+            @test config.default_gate_voltage == 10.0f0
+            @test config.trigger_duration == 0.02f0
+        end
+        
+        @testset "Show" begin
+            config = CVOutputConfig()
+            io = IOBuffer()
+            show(io, config)
+            str = String(take!(io))
+            @test occursin("CVOutputConfig", str)
+            @test occursin("sr=44100", str)
+        end
+    end
+    
+    @testset "Voltage conversion functions" begin
+        config = CVChannelConfig(channel_type=PitchCV(), midi_reference=0)
+        
+        @testset "midi_to_voltage" begin
+            # 1V/octave: each semitone = 1/12 volt
+            @test midi_to_voltage(0, config) ≈ 0.0f0 atol=1e-5
+            @test midi_to_voltage(12, config) ≈ 1.0f0 atol=1e-5
+            @test midi_to_voltage(24, config) ≈ 2.0f0 atol=1e-5
+            @test midi_to_voltage(69, config) ≈ 5.75f0 atol=1e-5  # A4
+            @test midi_to_voltage(60, config) ≈ 5.0f0 atol=1e-5   # C4
+        end
+        
+        @testset "midi_to_voltage with reference" begin
+            config_ref = CVChannelConfig(channel_type=PitchCV(), midi_reference=60)
+            @test midi_to_voltage(60, config_ref) ≈ 0.0f0 atol=1e-5
+            @test midi_to_voltage(72, config_ref) ≈ 1.0f0 atol=1e-5
+        end
+        
+        @testset "midi_to_voltage with scale and offset" begin
+            config_scaled = CVChannelConfig(
+                channel_type=PitchCV(),
+                midi_reference=0,
+                scale=2.0,
+                offset=1.0
+            )
+            @test midi_to_voltage(12, config_scaled) ≈ 3.0f0 atol=1e-5  # 1V * 2 + 1V
+        end
+        
+        @testset "freq_to_voltage" begin
+            @test freq_to_voltage(440.0, config) ≈ 5.75f0 atol=0.01f0  # A4
+            @test freq_to_voltage(261.63, config) ≈ 5.0f0 atol=0.01f0   # C4
+            @test freq_to_voltage(0.0, config) == config.offset  # 0 Hz -> offset
+        end
+        
+        @testset "voltage_to_sample" begin
+            @test voltage_to_sample(5.0, 5.0) == 1.0f0
+            @test voltage_to_sample(-5.0, 5.0) == -1.0f0
+            @test voltage_to_sample(2.5, 5.0) == 0.5f0
+            @test voltage_to_sample(10.0, 5.0) == 1.0f0   # Clamped
+            @test voltage_to_sample(-10.0, 5.0) == -1.0f0  # Clamped
+        end
+        
+        @testset "sample_to_voltage" begin
+            @test sample_to_voltage(1.0, 5.0) == 5.0f0
+            @test sample_to_voltage(-1.0, 5.0) == -5.0f0
+            @test sample_to_voltage(0.5, 5.0) == 2.5f0
+        end
+        
+        @testset "clamp_voltage" begin
+            @test clamp_voltage(3.0, BIPOLAR_5V) == 3.0f0
+            @test clamp_voltage(10.0, BIPOLAR_5V) == 5.0f0
+            @test clamp_voltage(-10.0, BIPOLAR_5V) == -5.0f0
+            @test clamp_voltage(3.0, UNIPOLAR_5V) == 3.0f0
+            @test clamp_voltage(-1.0, UNIPOLAR_5V) == 0.0f0
+        end
+        
+        @testset "voltage_to_midi" begin
+            @test voltage_to_midi(0.0, config) ≈ 0.0f0 atol=1e-5
+            @test voltage_to_midi(1.0, config) ≈ 12.0f0 atol=1e-5
+            @test voltage_to_midi(5.75, config) ≈ 69.0f0 atol=1e-5
+        end
+        
+        @testset "voltage_to_freq" begin
+            @test voltage_to_freq(0.0, config) ≈ 8.18f0 atol=0.1f0   # MIDI 0
+            @test voltage_to_freq(5.75, config) ≈ 440.0f0 atol=1.0f0  # A4
+        end
+    end
+    
+    @testset "CVSignalState" begin
+        @testset "Construction" begin
+            state = CVSignalState()
+            @test state.current_voltage == 0.0f0
+            @test state.target_voltage == 0.0f0
+            @test state.gate_active == false
+            @test state.trigger_active == false
+            @test state.trigger_samples_remaining == 0
+            @test state.portamento_rate == 0.0f0
+        end
+        
+        @testset "update_signal!" begin
+            state = CVSignalState()
+            config = CVChannelConfig(channel_type=PitchCV())
+            
+            update_signal!(state, 5.0, true, config, 44100)
+            @test state.target_voltage == 5.0f0
+            @test state.gate_active == true
+            @test state.portamento_rate == Inf32  # No portamento
+        end
+        
+        @testset "update_signal! with portamento" begin
+            state = CVSignalState()
+            config = CVChannelConfig(channel_type=PitchCV(), portamento_time=0.1)
+            
+            update_signal!(state, 5.0, true, config, 44100)
+            @test state.target_voltage == 5.0f0
+            @test state.portamento_rate != Inf32
+            @test state.portamento_rate > 0.0f0
+        end
+    end
+    
+    @testset "Sample generation" begin
+        cv_config = CVOutputConfig(channels=2)
+        cv = CVOutput(cv_config)
+        
+        @testset "generate_samples" begin
+            samples = generate_samples(cv, 100)
+            @test size(samples) == (100, 2)
+            @test all(samples .== 0.0f0)  # Initial state is 0V
+        end
+        
+        @testset "generate_pitch_cv" begin
+            samples = generate_pitch_cv(cv, 440.0, 0.1; channel=1)
+            @test length(samples) == 4410  # 0.1s at 44.1kHz
+            @test all(samples .>= 0.0f0)
+            @test all(samples .<= 1.0f0)
+        end
+        
+        @testset "generate_gate_cv" begin
+            samples = generate_gate_cv(cv, true, 0.1; channel=2)
+            @test length(samples) == 4410
+            @test all(samples .== 1.0f0)  # Gate high = 5V = 1.0 sample
+        end
+        
+        @testset "generate_trigger_cv" begin
+            samples = generate_trigger_cv(cv, 0.1; channel=2)
+            @test length(samples) == 4410
+            # First samples should be high, then low after trigger duration
+            @test samples[1] == 1.0f0
+            @test samples[end] == 0.0f0
+        end
+        
+        @testset "generate_ramp" begin
+            samples = generate_ramp(cv, 0.0, 5.0, 0.1; channel=1)
+            @test length(samples) == 4410
+            @test samples[1] ≈ 0.0f0 atol=0.01f0
+            @test samples[end] ≈ 1.0f0 atol=0.01f0
+            # Should be monotonically increasing
+            @test all(diff(samples) .>= 0.0f0)
+        end
+    end
+    
+    @testset "CVOutput control API" begin
+        cv_config = CVOutputConfig(channels=3)
+        cv = CVOutput(cv_config)
+        
+        @testset "set_pitch!" begin
+            set_pitch!(cv, 440.0; channel=1, gate=true)
+            @test cv.signal_states[1].target_voltage ≈ 5.75f0 atol=0.01f0
+            @test cv.signal_states[1].gate_active == true
+        end
+        
+        @testset "set_midi_pitch!" begin
+            set_midi_pitch!(cv, 69; channel=1, gate=true)
+            @test cv.signal_states[1].target_voltage ≈ 5.75f0 atol=0.01f0
+        end
+        
+        @testset "set_gate!" begin
+            set_gate!(cv, true; channel=2)
+            @test cv.signal_states[2].gate_active == true
+            
+            set_gate!(cv, false; channel=2)
+            @test cv.signal_states[2].gate_active == false
+        end
+        
+        @testset "set_velocity!" begin
+            set_velocity!(cv, 0.8; channel=3)
+            @test cv.signal_states[3].target_voltage > 0.0f0
+        end
+        
+        @testset "trigger!" begin
+            trigger!(cv; channel=2)
+            @test cv.signal_states[2].trigger_active == true
+            @test cv.signal_states[2].trigger_samples_remaining > 0
+        end
+        
+        @testset "release_gates!" begin
+            set_gate!(cv, true; channel=1)
+            set_gate!(cv, true; channel=2)
+            
+            release_gates!(cv)
+            @test cv.signal_states[1].gate_active == false
+            @test cv.signal_states[2].gate_active == false
+        end
+        
+        @testset "reset!" begin
+            set_pitch!(cv, 440.0; channel=1, gate=true)
+            set_gate!(cv, true; channel=2)
+            
+            reset!(cv)
+            @test cv.signal_states[1].current_voltage == 0.0f0
+            @test cv.signal_states[1].target_voltage == 0.0f0
+            @test cv.signal_states[1].gate_active == false
+            @test cv.signal_states[2].gate_active == false
+        end
+        
+        @testset "Channel out of range" begin
+            @test_throws ErrorException set_pitch!(cv, 440.0; channel=0)
+            @test_throws ErrorException set_pitch!(cv, 440.0; channel=4)
+            @test_throws ErrorException set_gate!(cv, true; channel=0)
+            @test_throws ErrorException set_velocity!(cv, 0.5; channel=4)
+        end
+    end
+    
+    @testset "CVOutput state queries" begin
+        cv_config = CVOutputConfig(channels=2)
+        cv = CVOutput(cv_config)
+        
+        @testset "current_voltage" begin
+            @test current_voltage(cv, 1) == 0.0f0
+            
+            set_pitch!(cv, 440.0; channel=1)
+            # Note: current_voltage doesn't change until samples are generated
+            @test current_voltage(cv, 1) == 0.0f0
+        end
+        
+        @testset "current_voltages" begin
+            voltages = current_voltages(cv)
+            @test length(voltages) == 2
+            @test all(voltages .== 0.0f0)
+        end
+        
+        @testset "gate_active" begin
+            @test gate_active(cv, 2) == false
+            
+            set_gate!(cv, true; channel=2)
+            @test gate_active(cv, 2) == true
+        end
+        
+        @testset "sample_rate and channels" begin
+            @test sample_rate(cv) == 44100
+            @test channels(cv) == 2
+        end
+        
+        @testset "isrunning" begin
+            @test !isrunning(cv)
+        end
+        
+        @testset "Show" begin
+            io = IOBuffer()
+            show(io, cv)
+            str = String(take!(io))
+            @test occursin("CVOutput", str)
+            @test occursin("ch=2", str)
+        end
+    end
+    
+    @testset "Integration with harmonic tracking" begin
+        cv_config = CVOutputConfig(channels=2)
+        cv = CVOutput(cv_config)
+        
+        @testset "output_series!" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            output_series!(cv, series; pitch_channel=1, gate_channel=2)
+            @test cv.signal_states[1].target_voltage ≈ 5.75f0 atol=0.01f0
+            @test cv.signal_states[1].gate_active == true
+            @test cv.signal_states[2].gate_active == true
+        end
+        
+        @testset "output_peak!" begin
+            peak = Peak(440.0, 5.0, 23, 0.1, 0.95, 20.0)
+            
+            output_peak!(cv, peak; pitch_channel=1, gate_channel=2)
+            @test cv.signal_states[1].target_voltage ≈ 5.75f0 atol=0.01f0
+            @test cv.signal_states[2].gate_active == true
+        end
+        
+        @testset "output_series_list!" begin
+            series_list = [
+                HarmonicSeries(440.0, [Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)], 0.95, 0.0),
+                HarmonicSeries(880.0, [Harmonic(1, 880.0, 8.0, 40, 0.0, 0.90)], 0.90, 0.0)
+            ]
+            
+            output_series_list!(cv, series_list; max_series=2)
+            @test cv.signal_states[1].target_voltage ≈ 5.75f0 atol=0.01f0
+            @test cv.signal_states[2].target_voltage ≈ 6.75f0 atol=0.01f0
+        end
+        
+        @testset "series_to_cv" begin
+            series = HarmonicSeries(440.0, [
+                Harmonic(1, 440.0, 10.0, 20, 0.0, 0.95)
+            ], 0.95, 0.0)
+            
+            voltage, gate = series_to_cv(series, cv_config; pitch_channel=1)
+            @test voltage ≈ 5.75f0 atol=0.01f0
+            @test gate == true
+        end
+        
+        @testset "peak_to_cv" begin
+            peak = Peak(440.0, 5.0, 23, 0.1, 0.95, 20.0)
+            
+            voltage = peak_to_cv(peak, cv_config; channel=1)
+            @test voltage ≈ 5.75f0 atol=0.01f0
+        end
+    end
+    
+    @testset "Eurorack configuration" begin
+        @testset "2-channel setup" begin
+            config = eurorack_config(2)
+            @test config.channels == 2
+            @test config.channel_configs[1].channel_type isa PitchCV
+            @test config.channel_configs[2].channel_type isa GateCV
+        end
+        
+        @testset "3-channel setup" begin
+            config = eurorack_config(3)
+            @test config.channels == 3
+            @test config.channel_configs[1].channel_type isa PitchCV
+            @test config.channel_configs[2].channel_type isa GateCV
+            @test config.channel_configs[3].channel_type isa VelocityCV
+        end
+        
+        @testset "4-channel setup" begin
+            config = eurorack_config(4)
+            @test config.channels == 4
+            @test config.channel_configs[4].channel_type isa ModulationCV
+        end
+    end
+    
+    @testset "Test configuration" begin
+        config = test_cv_config()
+        @test config.channels == 1
+        @test config.channel_configs[1].channel_type isa ModulationCV
+    end
+    
+    @testset "print_cv_state" begin
+        cv_config = CVOutputConfig(channels=2)
+        cv = CVOutput(cv_config)
+        
+        # Just verify it doesn't error
+        @test (print_cv_state(cv); true)
+    end
+    
+    @testset "Full pipeline integration" begin
+        # Create a complete pipeline: FFT -> Peak Detection -> Harmonic Tracking -> CV Output
+        sr = 44100
+        nfft = 4096
+        f0 = 440.0
+        
+        engine = FFTEngine(nfft, sr; window_type=HannWindow())
+        t = [i / sr for i in 0:(nfft - 1)]
+        samples = Float32[
+            1.0 * sin(2π * f0 * ti) +
+            0.5 * sin(2π * 2 * f0 * ti) +
+            0.3 * sin(2π * 3 * f0 * ti)
+            for ti in t
+        ]
+        
+        process!(engine, samples)
+        
+        detector = PeakDetector(snr_threshold=3.0, min_peak_distance=50.0)
+        tracker = HarmonicTracker(min_harmonics=2, min_confidence=0.3)
+        
+        series_list = find_harmonic_series!(tracker, detector, engine)
+        @test length(series_list) >= 1
+        
+        # Output to CV
+        cv_config = eurorack_config(2)
+        cv = CVOutput(cv_config)
+        
+        output_series!(cv, series_list[1]; pitch_channel=1, gate_channel=2)
+        
+        # Verify CV state
+        @test cv.signal_states[1].target_voltage > 0.0f0
+        @test cv.signal_states[1].gate_active == true
+        @test cv.signal_states[2].gate_active == true
+        
+        # Generate some samples
+        samples = generate_samples(cv, 1000)
+        @test size(samples) == (1000, 2)
+        @test all(samples[:, 1] .>= 0.0f0)  # Pitch CV should be positive
+        @test all(samples[:, 2] .== 1.0f0)  # Gate should be high
+    end
+    
+end

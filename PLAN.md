@@ -148,46 +148,23 @@ Real-time audio spectrum analyzer with waterfall displays, peak detection, and e
 **Goal:** Phase 8: CV output via audio interface DC coupling
 
 **Deliverables:**
-- [ ] Core implementation
-- [ ] Tests
-- [ ] Documentation update
+- [x] Core implementation
+- [x] Tests
+- [x] Documentation update
 
 **Notes:**
-- 
-
----
-
-## Architecture Notes
-
-### Key Decisions
-
-- 
-
-### Data Flow
-
-```
-[Input] → [Parse] → [Transform] → [Output]
-```
-
-### Error Handling Strategy
-
-- 
-
----
-
-## Testing Strategy
-
-- Unit tests for core functions
-- Integration tests for full pipeline
-- Benchmarks for performance-critical paths
-
----
-
-## Open Questions
-
-1. 
-2. 
-
----
-
-*Generated for opencode sprint. Implement phase by phase. DO NOT RESEARCH. Build directly.*
+- Implemented `CVOutput` with PortAudio output stream management
+- `CVChannelConfig` with PitchCV, GateCV, TriggerCV, VelocityCV, ModulationCV types
+- Voltage conversion: `midi_to_voltage`, `freq_to_voltage`, `voltage_to_sample`, `sample_to_voltage`
+- 1V/octave standard with configurable reference, scale, and offset
+- Portamento/glide support with configurable time
+- `CVSignalState` tracks current/target voltage, gate, trigger, portamento rate
+- Real-time sample generation with `generate_sample` per channel
+- Software-mode sample generation for testing (no hardware required)
+- Control API: `set_pitch!`, `set_midi_pitch!`, `set_gate!`, `set_velocity!`, `trigger!`
+- Batch operations: `release_gates!`, `reset!`
+- Integration: `output_series!`, `output_peak!`, `output_series_list!`
+- Convenience: `eurorack_config` (2/3/4-channel), `test_cv_config`
+- `generate_ramp` for DC coupling testing
+- `print_cv_state` for debugging
+- 30+ tests covering voltage conversions, sample generation, control API, integration

@@ -19,4 +19,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite covering all 8 phases.
 - Initial documentation in README.md and architecture notes in PLAN.md.
 
-[1.0.0]: https://github.com/synthalorian 🎹🤺/tracking/releases/tag/v1.0.0
+[1.0.0]: https://github.com/synth 🎹🤺/tracking/releases/tag/v1.0.0

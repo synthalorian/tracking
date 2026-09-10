@@ -1,6 +1,6 @@
 # tracking
 
-![License](https://img.shields.io/badge/License-MIT-blue)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue)
 ![Language](https://img.shields.io/badge/Language-Julia-blue)
 
 > Real-time audio spectrum analyzer with waterfall displays, peak detection, and export to MIDI/CV. Jack/PipeWire native.
@@ -64,7 +64,7 @@ See `PLAN.md` for detailed architecture decisions and implementation notes.
 
 ## License
 
-MIT
+Apache-2.0
 
 ---
 

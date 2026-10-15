@@ -86,7 +86,7 @@ export note_count, pitch_range, notes_to_matrix
 export print_notes, validate_midi, midi_info
 
 # Phase 8 exports
-export CVOutput, CVOutputConfig, CVChannelConfig, CVSignalState
+export CVOutput, CVOutputConfig, CVChannelConfig, CVSignalState, update_signal!
 export CVChannelType, PitchCV, GateCV, TriggerCV, VelocityCV, ModulationCV
 export VoltageRange, BIPOLAR_5V, BIPOLAR_10V, UNIPOLAR_10V, UNIPOLAR_5V
 export start!, stop!, isrunning, reset!

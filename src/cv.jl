@@ -129,10 +129,15 @@ mutable struct CVOutputConfig
     )
         if channel_configs === nothing
             # Default: channel 1 = pitch, channel 2 = gate
-            channel_configs = [
+            # Default: channel 1 = pitch, channel 2 = gate, channel 3 = velocity,
+            # any further channels = modulation
+            defaults = CVChannelConfig[
                 CVChannelConfig(channel_type=PitchCV()),
-                CVChannelConfig(channel_type=GateCV())
+                CVChannelConfig(channel_type=GateCV()),
+                CVChannelConfig(channel_type=VelocityCV())
             ]
+            channel_configs = [i <= length(defaults) ? defaults[i] :
+                               CVChannelConfig(channel_type=ModulationCV()) for i in 1:channels]
         end
         
         new(
@@ -303,6 +308,15 @@ function generate_sample(state::CVSignalState, config::CVChannelConfig,
         
     elseif config.channel_type isa GateCV
         voltage = state.gate_active ? cv_config.default_gate_voltage : 0.0f0
+        # A trigger on a gate channel is a short gate pulse on top of the held gate.
+        if state.trigger_active
+            if state.trigger_samples_remaining > 0
+                voltage = cv_config.default_gate_voltage
+                state.trigger_samples_remaining -= 1
+            else
+                state.trigger_active = false
+            end
+        end
         
     elseif config.channel_type isa TriggerCV
         if state.trigger_active
@@ -774,6 +788,8 @@ function generate_trigger_cv(cv::CVOutput, duration_seconds::Real;
                               channel::Int=2)::Vector{Float32}
     num_samples = round(Int, duration_seconds * cv.config.sample_rate)
     
+    # The pulse replaces any held gate so the output returns low afterwards.
+    cv.signal_states[channel].gate_active = false
     trigger!(cv; channel=channel)
     
     buffer = generate_samples(cv, num_samples)
